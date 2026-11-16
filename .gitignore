@@ -1,0 +1,20 @@
+# Build PyInstaller
+build/
+dist/
+*.exe
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Dati generati dal programma
+zimbra_index.db
+*.db-journal
+TSL-IT.xml
+
+# Sistema
+Thumbs.db
+desktop.ini
+.DS_Store
