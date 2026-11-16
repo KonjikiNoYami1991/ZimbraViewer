@@ -44,20 +44,53 @@ It ships with a **digital signature** verifier (CAdES `.p7m`, PAdES, XAdES, Ital
 ### Digital signatures (built-in P7MReader)
 - **CAdES** (`.p7m`, nested or base64; detached `.p7s`), **PAdES** (signed PDFs, detects changes after signing), **XAdES** (`.xml`, cryptographic check), **FatturaPA** summary.
 - Counter-signatures and RFC 3161 **timestamps** verified; expired certificates validated at signing time.
-- Trust chain against the **AgID Trusted List** (refreshed at every start, with offline copy) + Windows certificate store; OCSP/CRL revocation in soft-fail mode.
+- Trust chain against the **AgID Trusted List** (refreshed at every start, with offline copy) + system certificate store (Windows, macOS keychain, Linux distribution CAs); OCSP/CRL revocation in soft-fail mode.
 - Clear outcomes: **Verified / Warning / Invalid**, with the list of checks for every signature; CSV/HTML reports.
 
 ### Export
 - **Export PDF + attachments** (bulk on checked messages or a single one): for each message a folder `YYYY.MM.DD HH.mm.ss <subject>` containing the PDF, attachments (original `.p7m` **and** extracted document), a `Dettagli mail.txt` with headers and verification results, and unpacked `postacert.eml`.
-- Windows-safe file names that respect the 260-character path limit.
+- File names valid on Windows, macOS and Linux, within Windows' 260-character path limit (exports can be copied anywhere).
 
 ### Interface
 - Dark theme, **single-instance** window (new launches hand their paths to the open window), long jobs in **non-modal** dialogs that can be minimised to the status bar.
 
-## Requirements
+## Download and install
 
-- **Windows 10/11**
-- **Python 3.12+** (tested with 3.15)
+Ready-made builds are on the **Releases** page (or in the *Artifacts* of the **Build** workflow under Actions). They are **standalone**: Python, Qt and Chromium are bundled, nothing else to install.
+
+| System | File | How to start |
+|---|---|---|
+| **Windows 10/11** (x64) | `ZimbraViewer-<ver>-windows-x64.exe` | double-click |
+| **macOS 12+** Apple Silicon (M1…M4) | `ZimbraViewer-<ver>-macOS-arm64.dmg` | open the `.dmg`, drag the app to *Applications* |
+| **macOS 12+** Intel | `ZimbraViewer-<ver>-macOS-x86_64.dmg` | same as above |
+| **Linux** x86_64 (Debian 12+, Ubuntu 22.04+, Fedora 36+, Arch, Manjaro, openSUSE…) | `ZimbraViewer-<ver>-x86_64.AppImage` | `chmod +x`, then double-click |
+| **Linux** x86_64, menu install | `ZimbraViewer-<ver>-linux-x86_64.tar.gz` | extract and run `./installa-linux.sh` |
+
+**macOS** – the app is not signed with an Apple Developer certificate, so macOS blocks it on first launch: open *System Settings → Privacy & Security* and click **Open Anyway** (once). Or, from Terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/ZimbraViewer.app
+```
+
+On macOS files also open via *Open With → ZimbraViewer* or by dropping them on the Dock icon.
+
+**Linux (AppImage)**
+
+```bash
+chmod +x ZimbraViewer-*-x86_64.AppImage
+```
+
+```bash
+./ZimbraViewer-*-x86_64.AppImage
+```
+
+Without FUSE the AppImage still starts with `--appimage-extract-and-run`, or use the `.tar.gz`. The `.tar.gz` installs for the current user only (`~/.local/opt/zimbraviewer`, with a menu entry and the `zimbraviewer` command); remove it with `./installa-linux.sh --rimuovi`.
+On distributions that forbid user namespaces to non-installed programs (e.g. Ubuntu 23.10+ with AppArmor) the Chromium sandbox of the preview is disabled automatically; previews still run with JavaScript off and non-navigable links.
+
+## Requirements (running from source)
+
+- **Windows 10/11**, **macOS 12+** or **Linux** with a graphical desktop (X11 or Wayland)
+- **Python 3.12+** (tested with 3.13 and 3.15)
 
 | Package | Purpose | Required |
 |---|---|---|
@@ -86,6 +119,22 @@ python "ZimbraViewer 3.2.py" "C:\Mail\export" backup.tgz takeout.zip outlook.pst
 
 ## Build the executable
 
+PyInstaller does not cross-compile: each build is made on its own OS. The easiest way is the **GitHub Actions** workflow `.github/workflows/build.yml`, which builds every version in parallel: start it from *Actions → Build → Run workflow*, or push a `v*` tag (e.g. `v3.2.0`) to also get a Release with all packages attached.
+
+### macOS and Linux
+
+```bash
+./build_zimbra.sh
+```
+
+It creates a `.venv-build` virtual environment, installs the dependencies and uses `ZimbraViewer.spec`:
+- **macOS** → `dist/ZimbraViewer.app` and `dist/ZimbraViewer-<ver>-macOS-<arch>.dmg` (for the architecture of the Mac it runs on);
+- **Linux** → `dist/ZimbraViewer-<ver>-x86_64.AppImage` and `dist/ZimbraViewer-<ver>-linux-x86_64.tar.gz`. For an AppImage that runs on many distributions, build on the one with the oldest glibc you want to support (the workflow uses Ubuntu 22.04).
+
+`libpff-python` (for `.pst`) is compiled from source and needs a C compiler (`build-essential` / `gcc` / Xcode Command Line Tools); without it the build continues without `.pst` support. Icons `zimbra_icon.png` / `.icns` are regenerated with `python packaging/genera_icone.py`.
+
+### Windows
+
 `build_zimbra.bat` installs the dependencies and builds the exe with PyInstaller, including icon and version info (`version_info.txt`):
 
 ```bash
@@ -103,8 +152,9 @@ The first produces a single `dist\ZimbraViewer.exe`; `onedir` produces a folder 
 | What | Where |
 |---|---|
 | Mail index | `zimbra_index.db` inside the mail folder |
-| AgID Trusted List | `%LOCALAPPDATA%\ZimbraViewer\TSL-IT.xml` |
-| Signature settings | read (never written) from `%APPDATA%\P7MReader\impostazioni.json`, if present |
+| AgID Trusted List | Windows `%LOCALAPPDATA%\ZimbraViewer\TSL-IT.xml` · macOS `~/Library/Caches/ZimbraViewer/TSL-IT.xml` · Linux `~/.cache/ZimbraViewer/TSL-IT.xml` |
+| Signature settings | read (never written) from `P7MReader/impostazioni.json` in `%APPDATA%` (Windows), `~/Library/Application Support` (macOS) or `~/.config` (Linux), if present |
+| UI preferences | QSettings: registry (Windows), `~/Library/Preferences` (macOS), `~/.config/ZimbraViewer` (Linux) |
 | Attachments opened on the fly | temp folder, cleaned up on exit |
 
 ## License

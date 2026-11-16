@@ -1,0 +1,4 @@
+#!/bin/sh
+# Avvio di ZimbraViewer dentro l'AppImage
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/lib/zimbraviewer/ZimbraViewer" "$@"

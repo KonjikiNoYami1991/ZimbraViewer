@@ -4,6 +4,12 @@ ZimbraViewer 3.2 - Lettore locale di archivi di posta + verifica firme digitali 
 
 CHANGELOG
 ---------
+3.2 multipiattaforma (2026-11-16)
+  Aggiunto: versioni standalone per macOS (.app/.dmg, Apple Silicon e Intel) e Linux (AppImage e .tar.gz per Debian,
+            Ubuntu, Fedora, Arch...). Apertura dal Finder ("Apri con", Dock), "Mostra nella cartella" con Finder e file
+            manager Linux, cache e impostazioni nelle cartelle standard di ciascun sistema, certificati di sistema
+            (portachiavi macOS, raccolta CA della distribuzione) al posto dell'archivio di Windows, HTTPS verificato
+            anche nell'app per macOS, sandbox di Chromium disattivata solo dove la distribuzione la impedisce.
 3.2 (2026-11-09)
   Modificato: selezionando una cartella nell'albero si vedono anche le mail di tutte le sue sottocartelle, a qualunque
               profondità: le mail nidificate non sfuggono più. La colonna "Cartella" indica dove si trova ciascuna mail
@@ -24,6 +30,7 @@ Outlook: olefile (.msg), libpff-python (.pst/.ost).
 Senza una libreria opzionale il resto funziona: le firme risultano "Non verificato", i .pst danno un messaggio chiaro.
     pip install pyqt6 pyqt6-webengine asn1crypto pyhanko pyhanko-certvalidator cryptography lxml olefile libpff-python pyinstaller
     pyinstaller --noconsole --onefile --icon=zimbra_icon.ico "ZimbraViewer 3.2.py"
+macOS e Linux: ./build_zimbra.sh (usa ZimbraViewer.spec; .app + .dmg su macOS, AppImage + .tar.gz su Linux).
 
 COME SI APRE LA POSTA
 ---------------------
@@ -54,7 +61,7 @@ COME SI APRE LA POSTA
 
 SINGOLA ISTANZA
 ---------------
-Una sola finestra per utente Windows: il primo avvio apre un QLocalServer; le esecuzioni successive gli passano i
+Una sola finestra per utente (Windows, macOS, Linux): il primo avvio apre un QLocalServer; le esecuzioni successive gli passano i
 percorsi ricevuti da riga di comando (JSON via QLocalSocket) e terminano. La finestra si porta in primo piano.
 
 INDICIZZAZIONE E PERCORSI RELATIVI
@@ -100,10 +107,10 @@ FIRME DIGITALI: IL P7MREADER INTEGRATO
   CAdES (.p7m anche annidati, .p7s sul file accanto), PAdES (.pdf con pyhanko: integrità e modifiche dopo la firma),
   XAdES (.xml, con verifica crittografica), riepilogo FatturaPA, controfirme verificate, marca temporale verificata
   (se valida la firma si valuta a quella data), elenco dei controlli per ogni firma, nomi puliti («.pdf (1) (1).p7m» -> «.pdf»), catena di fiducia con
-  pyhanko-certvalidator verso la Trusted List AgID (eIDAS) + archivio certificati di Windows + CA aggiunte nel
+  pyhanko-certvalidator verso la Trusted List AgID (eIDAS) + archivio certificati di sistema + CA aggiunte nel
   P7MReader (completata via AIA), revoca OCSP/CRL in soft-fail, validazione alla data di firma per i certificati scaduti.
 - Trusted List AgID (https://eidas.agid.gov.it/TL/TSL-IT.xml): riscaricata a ogni avvio se c'è rete e salvata in
-  %LOCALAPPDATA%\ZimbraViewer\TSL-IT.xml; offline si usa quella copia, altrimenti il TSL-IT.xml accanto al programma
+  %LOCALAPPDATA%\ZimbraViewer\TSL-IT.xml (macOS ~/Library/Caches/ZimbraViewer, Linux ~/.cache/ZimbraViewer); offline si usa quella copia, altrimenti il TSL-IT.xml accanto al programma
   (o incluso nell'exe con --add-data "TSL-IT.xml;."). Certificatori ritirati prima della firma -> "Attenzione".
 - Impostazioni lette (senza modificarle) da %APPDATA%\P7MReader\impostazioni.json; se il P7MReader non c'è, i suoi default.
 - Scheda "Verifica firme": file o cartelle intere (anche trascinati), filtri per esito e ricerca, dettaglio di ogni
@@ -174,12 +181,149 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QTabBar, QDialog, QProgressBar, QFrame, QSizePolicy, QComboBox, QStackedWidget,
                              QTextBrowser, QGraphicsOpacityEffect)
 from PyQt6.QtCore import (Qt, QThread, QObject, pyqtSignal, QTimer, QUrl, QSize, QRectF, QPointF, QSettings,
-                          QPropertyAnimation, QEasingCurve)
+                          QPropertyAnimation, QEasingCurve, QEvent)
 from PyQt6.QtGui import (QIcon, QPixmap, QDesktopServices, QShortcut, QKeySequence, QColor, QPainter, QPen,
                          QLinearGradient)
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
+
+# ==========================================
+# PIATTAFORMA: WINDOWS, MACOS, LINUX
+# ==========================================
+IS_WIN = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
+FROZEN = bool(getattr(sys, 'frozen', False))
+
+def cartella_cache_app() -> str:
+    """Cache per utente: %LOCALAPPDATA%\\ZimbraViewer, ~/Library/Caches/ZimbraViewer, $XDG_CACHE_HOME/ZimbraViewer."""
+    if IS_WIN:
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif IS_MAC:
+        base = os.path.join(os.path.expanduser("~"), "Library", "Caches")
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "ZimbraViewer")
+
+def cartelle_config_utente() -> List[str]:
+    """Dove cercare le impostazioni di altri programmi (P7MReader), in ordine di preferenza."""
+    if IS_WIN:
+        return [os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Roaming")]
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    if IS_MAC:
+        return [os.path.join(os.path.expanduser("~"), "Library", "Application Support"), xdg]
+    return [xdg]
+
+def ambiente_esterno() -> dict:
+    """Ambiente per i programmi esterni (file manager, visualizzatori). Nell'eseguibile PyInstaller/AppImage su Linux
+    LD_LIBRARY_PATH e le variabili Qt puntano alle librerie incluse: un programma di sistema le caricherebbe al posto
+    delle sue e potrebbe non partire. Qui si ripristina l'ambiente originale."""
+    env = dict(os.environ)
+    if not FROZEN or IS_WIN:
+        return env
+    for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH"):
+        orig = env.pop(var + "_ORIG", None)
+        if orig:
+            env[var] = orig
+        else:
+            env.pop(var, None)
+    for var in list(env):
+        if var.startswith(("QT_", "QTWEBENGINE", "QML", "PYTHON", "_PYI", "_MEI")) or var in ("APPDIR", "APPIMAGE", "ARGV0", "OWD"):
+            if var not in ("QT_QPA_PLATFORMTHEME", "QT_SCALE_FACTOR", "QT_AUTO_SCREEN_SCALE_FACTOR", "QT_SCREEN_SCALE_FACTORS"):
+                env.pop(var, None)
+    return env
+
+def _avvia_esterno(comando) -> bool:
+    try:
+        subprocess.Popen(comando, env=ambiente_esterno(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=not IS_WIN)
+        return True
+    except Exception:
+        return False
+
+def apri_esterno(percorso: str) -> bool:
+    """Apre un file o una cartella con il programma predefinito del sistema."""
+    if IS_LINUX and FROZEN and shutil.which("xdg-open"):
+        return _avvia_esterno(["xdg-open", percorso])
+    return QDesktopServices.openUrl(QUrl.fromLocalFile(percorso))
+
+def mostra_nel_file_manager(percorso: str) -> None:
+    """Apre la cartella del file con il file selezionato (Esplora file, Finder o il file manager di Linux)."""
+    percorso = os.path.abspath(percorso)
+    if IS_WIN and _avvia_esterno(["explorer", f"/select,{os.path.normpath(percorso)}"]):
+        return
+    if IS_MAC and _avvia_esterno(["open", "-R", percorso]):
+        return
+    if IS_LINUX and shutil.which("dbus-send"):
+        uri = QUrl.fromLocalFile(percorso).toString(QUrl.ComponentFormattingOption.FullyEncoded)
+        try:
+            r = subprocess.run(["dbus-send", "--session", "--print-reply", "--dest=org.freedesktop.FileManager1",
+                                "--type=method_call", "/org/freedesktop/FileManager1",
+                                "org.freedesktop.FileManager1.ShowItems", f"array:string:{uri}", "string:"],
+                               env=ambiente_esterno(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            if r.returncode == 0:
+                return
+        except Exception:
+            pass
+    apri_esterno(os.path.dirname(percorso))
+
+def contesto_ssl() -> ssl.SSLContext:
+    """HTTPS verificato ovunque: certificati di sistema + quelli di certifi (indispensabili nell'app per macOS,
+    dove l'OpenSSL incluso non conosce il portachiavi di sistema)."""
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+        ctx.load_verify_locations(certifi.where())
+    except Exception:
+        pass
+    if not IS_WIN:
+        for f in FILE_CA_SISTEMA:
+            if os.path.isfile(f):
+                try:
+                    ctx.load_verify_locations(f)
+                except Exception:
+                    pass
+                break
+    return ctx
+
+# Raccolte di certificati delle principali distribuzioni (Debian/Ubuntu, Fedora/RHEL, openSUSE, Arch, Alpine) e macOS
+FILE_CA_SISTEMA = ("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
+                   "/etc/ssl/ca-bundle.pem", "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+                   "/etc/ca-certificates/extracted/tls-ca-bundle.pem", "/etc/ssl/cert.pem")
+
+def scarica_url(url: str, timeout: float) -> bytes:
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    if url.lower().startswith("https://"):
+        with urllib.request.urlopen(req, timeout=timeout, context=_CTX_SSL()) as r:
+            return r.read()
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+_ctx_ssl_cache = []
+def _CTX_SSL():
+    if not _ctx_ssl_cache:
+        _ctx_ssl_cache.append(contesto_ssl())
+    return _ctx_ssl_cache[0]
+
+def prepara_webengine():
+    """Da chiamare prima di creare QApplication. Su Linux Chromium usa i namespace utente come sandbox: alcune
+    distribuzioni (Ubuntu 23.10+ con AppArmor, kernel con unprivileged_userns_clone=0) li vietano ai programmi
+    non installati e l'anteprima non partirebbe. Solo in quel caso si disattiva la sandbox di Chromium
+    (le anteprime hanno comunque JavaScript spento e link non navigabili)."""
+    if not IS_LINUX or "QTWEBENGINE_DISABLE_SANDBOX" in os.environ:
+        return
+    def leggi(p):
+        try:
+            with open(p) as f:
+                return f.read().strip()
+        except Exception:
+            return None
+    vietati = (leggi("/proc/sys/kernel/apparmor_restrict_unprivileged_userns") == "1"
+               or leggi("/proc/sys/kernel/unprivileged_userns_clone") == "0"
+               or leggi("/proc/sys/user/max_user_namespaces") == "0")
+    if vietati or os.geteuid() == 0:
+        os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
 
 # ==========================================
 # TEMA: PALETTE, FOGLIO DI STILE, ICONE
@@ -264,7 +408,11 @@ def pulsante(testo, nome_icona=None, ruolo=None, suggerimento=None, colore_icona
     b.setCursor(Qt.CursorShape.PointingHandCursor)
     return b
 
-FONT_UI = "'Segoe UI Variable Text', 'Segoe UI', 'Inter', 'Roboto', sans-serif"
+FONT_UI = ("'Segoe UI Variable Text', 'Segoe UI', 'SF Pro Text', 'Helvetica Neue', 'Inter', 'Cantarell', "
+           "'Noto Sans', 'Ubuntu', 'Roboto', 'DejaVu Sans', sans-serif")
+FONT_HTML = ("'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'Cantarell', 'Noto Sans', "
+             "'Ubuntu', 'DejaVu Sans', Arial, sans-serif")
+FONT_MONO = "Consolas, 'Cascadia Mono', Menlo, 'SF Mono', 'DejaVu Sans Mono', 'Liberation Mono', monospace"
 
 STILE = f"""
 * {{ outline: 0; }}
@@ -388,7 +536,9 @@ def mostra_errore_con_copia(parent, titolo, messaggio):
 # Estensioni che possono eseguire codice: prima di aprirle si chiede conferma
 ESTENSIONI_PERICOLOSE = {
     '.exe', '.bat', '.cmd', '.com', '.scr', '.pif', '.msi', '.dll', '.cpl', '.lnk',
-    '.js', '.jse', '.vbs', '.vbe', '.wsf', '.wsh', '.ps1', '.hta', '.jar', '.reg'
+    '.js', '.jse', '.vbs', '.vbe', '.wsf', '.wsh', '.ps1', '.hta', '.jar', '.reg',
+    '.sh', '.bash', '.zsh', '.run', '.bin', '.appimage', '.desktop', '.deb', '.rpm', '.py', '.pl',  # Linux
+    '.app', '.command', '.tool', '.pkg', '.mpkg', '.dmg', '.workflow', '.scpt', '.applescript',    # macOS
 }
 
 _base_temp_allegati = None
@@ -560,7 +710,7 @@ def data_da_msg(msg):
 P = {"foglio": "#FFFFFF", "testo": "#1D2030", "tenue": "#6B7080", "bordo": "#E1E4EE", "accento": "#6B79EE",
      "fondo_blocco": "#F5F6FB", "citazione": "#C9CDE3", "testo_citato": "#555A72",
      "ok": "#1E9E6A", "warn": "#C98A12", "error": "#D6455F"}
-FONT_PAGINA = "'Segoe UI', Arial, sans-serif"
+FONT_PAGINA = FONT_HTML
 STILE_BASE_PAGINA = (f"<style>html{{background:{P['foglio']};color:{P['testo']}}}"
                      f"a{{color:{P['accento']}}}</style>")
 
@@ -1779,15 +1929,16 @@ class _ImpostazioniP7MReader:
 
     def __init__(self):
         self.d = dict(self.DEFAULT)
-        base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
-        try:
-            with open(os.path.join(base, "P7MReader", "impostazioni.json"), "r", encoding="utf-8") as f:
-                letto = json.load(f)
-            for k in self.DEFAULT:
-                if k in letto:
-                    self.d[k] = letto[k]
-        except Exception:
-            pass
+        for base in cartelle_config_utente():
+            try:
+                with open(os.path.join(base, "P7MReader", "impostazioni.json"), "r", encoding="utf-8") as f:
+                    letto = json.load(f)
+                for k in self.DEFAULT:
+                    if k in letto:
+                        self.d[k] = letto[k]
+                break
+            except Exception:
+                pass
 
     def __getitem__(self, k):
         return self.d.get(k, self.DEFAULT.get(k))
@@ -2118,13 +2269,15 @@ _TSL_STATI_RITIRATI = {"withdrawn", "deprecatedatnationallevel"}
 
 
 def _percorso_cache_tsl() -> str:
-    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
-    return os.path.join(base, "ZimbraViewer", "TSL-IT.xml")
+    return os.path.join(cartella_cache_app(), "TSL-IT.xml")
 
 
 def _percorsi_tsl_distribuita() -> List[str]:
     cartella = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
     cartelle = [getattr(sys, '_MEIPASS', ''), cartella, os.path.dirname(cartella)]
+    if IS_MAC and FROZEN:       # ZimbraViewer.app/Contents/MacOS -> Contents/Resources e cartella che contiene l'app
+        contents = os.path.dirname(cartella)
+        cartelle += [os.path.join(contents, "Resources"), os.path.dirname(os.path.dirname(contents))]
     return [os.path.join(c, "TSL-IT.xml") for c in cartelle if c]
 
 
@@ -2173,9 +2326,7 @@ def carica_tsl() -> Tuple[List[Tuple[x509.Certificate, str, Optional[datetime]]]
     """Scarica la Trusted List AgID (e aggiorna la cache); senza rete usa la cache o la copia distribuita."""
     cache = _percorso_cache_tsl()
     try:
-        req = urllib.request.Request(URL_TSL, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            dati = r.read()
+        dati = scarica_url(URL_TSL, 20)
         certificati, descr = leggi_tsl(dati)
         try:
             os.makedirs(os.path.dirname(cache), exist_ok=True)
@@ -2222,9 +2373,39 @@ class ArchivioFiducia:
     def _carica_file(percorso: str) -> List[x509.Certificate]:
         with open(percorso, 'rb') as f:
             dati = f.read()
-        if b'-----BEGIN' in dati[:200]:
+        if b'-----BEGIN' in dati:     # PEM, anche con commenti in testa (raccolte delle distribuzioni Linux)
             return [x509.Certificate.load(der) for _, _, der in pem.unarmor(dati, multiple=True)]
         return [x509.Certificate.load(dati)]
+
+    def _radici_di_sistema(self):
+        """CA attendibili del sistema: portachiavi di macOS, raccolta della distribuzione Linux, in mancanza certifi."""
+        radici = []
+        if IS_MAC:
+            for keychain in ("/System/Library/Keychains/SystemRootCertificates.keychain", "/Library/Keychains/System.keychain"):
+                try:
+                    r = subprocess.run(["/usr/bin/security", "find-certificate", "-a", "-p", keychain],
+                                       capture_output=True, timeout=20, env=ambiente_esterno())
+                    if r.returncode == 0 and r.stdout:
+                        radici.extend(x509.Certificate.load(der) for _, _, der in pem.unarmor(r.stdout, multiple=True))
+                except Exception:
+                    pass
+        else:
+            for f in FILE_CA_SISTEMA:
+                if os.path.isfile(f):
+                    try:
+                        trovati = self._carica_file(f)
+                    except Exception:
+                        continue
+                    if trovati:
+                        radici.extend(trovati)
+                        break
+        if not radici:
+            try:
+                import certifi
+                radici.extend(self._carica_file(certifi.where()))
+            except Exception:
+                pass
+        return radici
 
     def ricarica(self):
         radici, intermedi, tsl = [], [], {}
@@ -2244,11 +2425,7 @@ class ArchivioFiducia:
                 except Exception:
                     pass
         else:
-            try:
-                import certifi
-                radici.extend(self._carica_file(certifi.where()))
-            except Exception:
-                pass
+            radici.extend(self._radici_di_sistema())
         for p in IMP["radici_extra"]:
             try:
                 radici.extend(self._carica_file(p))
@@ -2286,9 +2463,7 @@ class ArchivioFiducia:
         dati = None
         if url.lower().startswith(("http://", "https://")):
             try:
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=6) as r:
-                    dati = r.read()
+                dati = scarica_url(url, 6)
             except Exception:
                 dati = None
         self.cache_http[url] = dati
@@ -2746,7 +2921,7 @@ async def _valida_cert_reale(cert, certs_busta, momento_firma, moment, marca, ts
                 emittente = _get(cert.issuer, 'common_name') or _get(cert.issuer, 'organization_name') or "sconosciuto"
                 if 'PathBuilding' in nome_err:
                     c.append(Controllo("Catena di fiducia", "error", f"l'emittente «{emittente}» non è tra le autorità attendibili "
-                                       "(Trusted List AgID, archivio di Windows, CA aggiunte)"))
+                                       "(Trusted List AgID, archivio di sistema, CA aggiunte)"))
                 else:
                     c.append(Controllo("Catena di fiducia", "error", f"non verificata: {msg}"))
         else:
@@ -2781,7 +2956,7 @@ async def _valida_cert_reale(cert, certs_busta, momento_firma, moment, marca, ts
         else:
             c.append(Controllo("Trusted List AgID", "ok", f"certificatore qualificato eIDAS ({tipo})"))
     else:
-        c.append(Controllo("Catena di fiducia", "ok", "verificata sull'archivio di Windows o sulle CA aggiunte"))
+        c.append(Controllo("Catena di fiducia", "ok", "verificata sull'archivio di sistema o sulle CA aggiunte"))
         c.append(Controllo("Trusted List AgID", "none", "certificatore non presente nella lista"))
     if not revoca_attiva:
         c.append(Controllo("Revoca", "none", "controllo OCSP/CRL disattivato nelle impostazioni"))
@@ -3447,7 +3622,7 @@ def esporta_html(risultati: List[RisultatoDoc], path: str):
                          f"<td><span class='b' style='background:{colori[fi.stato]}'>{e(etichetta_firma(fi))}</span> {e(fi.esito)}<ul>{controlli}</ul></td></tr>")
     ora = fmt_dt(datetime.now().astimezone())
     doc = f"""<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Report verifica firme</title>
-<style>body{{font:14px Segoe UI,Arial,sans-serif;margin:32px;color:#101828;background:#f2f4f8}}
+<style>body{{font:14px {FONT_HTML};margin:32px;color:#101828;background:#f2f4f8}}
 h1{{color:#4C57CC;margin:0 0 4px}}table{{border-collapse:collapse;width:100%;background:#fff;border-radius:10px;overflow:hidden}}
 td,th{{padding:8px 10px;border-right:1px solid #e3e7ee;vertical-align:top;text-align:left}}th{{background:#13141B;color:#fff}}
 tr.doc td{{background:#f6f8fb}}.b{{color:#fff;border-radius:8px;padding:2px 8px;font-size:12px;font-weight:600}}
@@ -3658,7 +3833,7 @@ def righe_verifica(ris):
 
 def nota_verifica():
     return (f"Verifica eseguita il {fmt_dt(datetime.now().astimezone())} con il {MOTORE_FIRME} - "
-            f"radici attendibili: archivio certificati di Windows + CA aggiunte nel P7MReader; "
+            f"radici attendibili: archivio certificati di sistema + CA aggiunte nel P7MReader; "
             f"revoca OCSP/CRL: {'attiva (soft-fail)' if IMP['revoca'] else 'disattivata'}.")
 
 class VerificaFirme:
@@ -5371,7 +5546,7 @@ class MailViewerTab(QWidget):
             box.addButton(QMessageBox.StandardButton.Ok)
             box.exec()
             if box.clickedButton() == apri and dir_dest:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(dir_dest))
+                apri_esterno(dir_dest)
 
     # ---------- anteprima ----------
     def mostra_anteprima_mail_da_tabella(self):
@@ -5519,7 +5694,7 @@ class MailViewerTab(QWidget):
                 path_out = percorso_libero(cartella_dest, nome_windows_sicuro(nome, 150, "allegato"))
                 with open(path_out, 'wb') as f_out:
                     f_out.write(dati)
-                if QDesktopServices.openUrl(QUrl.fromLocalFile(path_out)):
+                if apri_esterno(path_out):
                     aperti += 1
                 else:
                     non_aperti.append(nome)
@@ -5644,12 +5819,12 @@ def html_risultato(r):
                                f"padding:2px 8px;font-weight:700;font-size:12px'>&nbsp;{e(testo)}&nbsp;</span>")
     riga = lambda k, v: (f"<tr><td style='color:{C['tenue']};padding:3px 14px 3px 0;vertical-align:top;white-space:nowrap'>{e(k)}</td>"
                          f"<td style='padding:3px 0'>{v}</td></tr>") if v else ""
-    out = [f"<div style='font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:{C['testo']}'>",
+    out = [f"<div style=\"font-family:{FONT_HTML};font-size:13px;color:{C['testo']}\">",
            f"<div style='margin-bottom:6px'>{chip(etichetta_esito(r), colore)}</div>",
            f"<div style='font-size:17px;font-weight:700;margin:6px 0 2px'>{e(r.nome)}</div>",
            f"<div style='color:{C['attenuato']};margin-bottom:10px'>{e(r.esito)}</div><table>",
            riga("Formato", e(r.formato)), riga("Dimensione", e(fmt_size(r.dimensione))),
-           riga("Origine", e(r.origine or r.percorso)), riga("SHA-256", f"<span style='font-family:Consolas,monospace;font-size:11px'>{e(r.sha256)}</span>")]
+           riga("Origine", e(r.origine or r.percorso)), riga("SHA-256", f"<span style=\"font-family:{FONT_MONO};font-size:11px\">{e(r.sha256)}</span>")]
     if r.nome_contenuto and r.formato == 'CAdES':
         out.append(riga("Documento contenuto", e(f"{r.nome_contenuto} ({r.tipo_contenuto})")))
     if r.livelli:
@@ -6006,7 +6181,7 @@ class FirmeTab(QWidget):
                                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                        QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
                     return
-            if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            if not apri_esterno(path):
                 mostra_errore_con_copia(self, "Impossibile aprire", f"Nessuna applicazione associata a:\n{path}")
         except Exception as e:
             mostra_errore_con_copia(self, "Errore nell'apertura", str(e))
@@ -6053,16 +6228,13 @@ class FirmeTab(QWidget):
             box.addButton(QMessageBox.StandardButton.Ok)
             box.exec()
             if box.clickedButton() == apri and ultimo:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(ultimo)))
+                apri_esterno(os.path.dirname(ultimo))
 
     def mostra_in_cartella(self):
         r = self._selezionato()
         if r is None or r.origine:
             return
-        if sys.platform == "win32":
-            subprocess.Popen(["explorer", f"/select,{os.path.normpath(r.percorso)}"])
-        else:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(r.percorso)))
+        mostra_nel_file_manager(r.percorso)
 
     def mostra_certificato(self):
         r = self._selezionato()
@@ -6081,7 +6253,7 @@ class FirmeTab(QWidget):
         l = QVBoxLayout(dlg)
         testo = QTextBrowser()
         testo.setPlainText("\n\n".join(blocchi))
-        testo.setStyleSheet("font-family: Consolas, 'Cascadia Mono', monospace; font-size: 12px;")
+        testo.setStyleSheet(f"font-family: {FONT_MONO}; font-size: 12px;")
         l.addWidget(testo)
         riga = QHBoxLayout()
         b_copia = pulsante("Copia", "copia")
@@ -6115,7 +6287,7 @@ class FirmeTab(QWidget):
                 QMessageBox.information(self, "Report salvato", f"Report salvato in:\n{path}")
             else:
                 esporta_html(elenco, path)
-                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+                apri_esterno(path)
         except Exception as e:
             mostra_errore_con_copia(self, "Errore nel salvataggio del report", str(e))
 
@@ -6477,11 +6649,12 @@ def invia_a_istanza_esistente(nome, percorsi):
     socket.connectToServer(nome)
     if not socket.waitForConnected(500):
         return False
-    try:    # permette alla finestra già aperta di prendere il focus (Windows)
-        import ctypes
-        ctypes.windll.user32.AllowSetForegroundWindow(-1)
-    except Exception:
-        pass
+    if IS_WIN:
+        try:    # permette alla finestra già aperta di prendere il focus
+            import ctypes
+            ctypes.windll.user32.AllowSetForegroundWindow(-1)
+        except Exception:
+            pass
     socket.write(json.dumps(percorsi).encode('utf-8') + b"\n")
     socket.flush()
     socket.waitForBytesWritten(2000)
@@ -6522,8 +6695,43 @@ class ServerIstanza(QObject):
             percorsi = []
         self.percorsi_ricevuti.emit(percorsi)
 
+class AppZimbra(QApplication):
+    """Su macOS i file aperti dal Finder (doppio clic, "Apri con", trascinamento sull'icona del Dock) non arrivano
+    nella riga di comando ma come eventi FileOpen: si raccolgono e si passano alla finestra tutti insieme."""
+    file_da_aprire = pyqtSignal(list)
+
+    def __init__(self, argv):
+        super().__init__(argv)
+        self._in_coda = []
+        self._pronta = False
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(150)
+        self._timer.timeout.connect(self._consegna)
+
+    def event(self, e):
+        if e.type() == QEvent.Type.FileOpen:
+            p = e.file() or e.url().toLocalFile()
+            if p:
+                self._in_coda.append(p)
+                if self._pronta:
+                    self._timer.start()
+            return True
+        return super().event(e)
+
+    def pronta(self):
+        self._pronta = True
+        if self._in_coda:
+            self._timer.start()
+
+    def _consegna(self):
+        percorsi, self._in_coda = self._in_coda, []
+        if percorsi:
+            self.file_da_aprire.emit(percorsi)
+
 if __name__ == '__main__':
-    app = QApplication(sys.argv)
+    prepara_webengine()
+    app = AppZimbra(sys.argv)
 
     # Con --noconsole un errore non gestito in PyQt6 chiude il programma senza dire nulla:
     # lo si mostra in una finestra (copiabile) e il programma resta aperto.
@@ -6544,7 +6752,25 @@ if __name__ == '__main__':
             _gestione_errore["attiva"] = False
     sys.excepthook = errore_non_gestito
     app.setApplicationName("ZimbraViewer")
-    app.setStyleSheet(STILE)
+    app.setApplicationDisplayName("ZimbraViewer")
+    app.setDesktopFileName("zimbraviewer")       # Wayland/GNOME: collega la finestra al file .desktop e alla sua icona
+    stile = STILE
+    if not IS_WIN:
+        app.setStyle("Fusion")                   # il foglio di stile è pensato su Fusion/Windows, non sullo stile macOS
+        # Fusion senza tema di icone mostra una "X" rossa sulle schede: la si sostituisce con una crocetta del tema
+        try:
+            croce = os.path.join(cartella_temp_allegati(), "chiudi_scheda.svg")
+            with open(croce, "w", encoding="utf-8") as f:
+                f.write(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" '
+                        f'stroke="{C["attenuato"]}" stroke-width="1.6" stroke-linecap="round"/></svg>')
+            stile += (f"\nQTabBar::close-button {{ image: url({croce.replace(os.sep, '/')}); subcontrol-position: right; "
+                      f"border-radius: 4px; margin: 2px; }}\nQTabBar::close-button:hover {{ background: {C['hover']}; }}\n")
+        except Exception:
+            pass
+    app.setStyleSheet(stile)
+    _pix_icona = QPixmap()
+    _pix_icona.loadFromData(ICON_SVG.encode('utf-8'))
+    app.setWindowIcon(QIcon(_pix_icona))
 
     # Percorsi assoluti: l'istanza già aperta ha una cartella di lavoro diversa dalla nostra
     argomenti = [os.path.abspath(a) if (not a.startswith('-') or os.path.exists(a)) else a for a in sys.argv[1:]]
@@ -6559,7 +6785,7 @@ if __name__ == '__main__':
         if invia_a_istanza_esistente(nome_ist, argomenti):
             sys.exit(0)
 
-    if not hasattr(sys, 'frozen') and not os.path.exists('zimbra_icon.ico'):
+    if not hasattr(sys, 'frozen') and IS_WIN and not os.path.exists('zimbra_icon.ico'):
         try:
             pix = QPixmap()
             pix.loadFromData(ICON_SVG.encode('utf-8'))
@@ -6569,7 +6795,9 @@ if __name__ == '__main__':
 
     finestra = ZimbraViewerApp()
     server_istanza.percorsi_ricevuti.connect(finestra.richiama_finestra)
+    app.file_da_aprire.connect(finestra.richiama_finestra)
     finestra.show()
+    app.pronta()
 
     # Archivio di fiducia (con il download della Trusted List AgID) preparato in sottofondo:
     # la prima verifica non deve aspettare la rete

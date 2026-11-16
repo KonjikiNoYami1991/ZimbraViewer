@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=ZimbraViewer
+GenericName=Lettore di archivi di posta
+GenericName[en]=Mail archive viewer
+Comment=Legge, cerca ed esporta archivi di posta (Zimbra, Gmail, Outlook, Thunderbird, mbox, eml) e verifica firme digitali
+Comment[en]=Read, search and export mail archives (Zimbra, Gmail, Outlook, Thunderbird, mbox, eml) and verify digital signatures
+Exec=ZimbraViewer %F
+Icon=zimbraviewer
+Terminal=false
+Categories=Office;Email;Viewer;
+MimeType=message/rfc822;application/mbox;application/vnd.ms-outlook;application/vnd.ms-outlook-pst;application/pkcs7-mime;application/pkcs7-signature;application/x-compressed-tar;application/x-tar;application/zip;
+Keywords=mail;email;eml;mbox;pst;zimbra;pec;p7m;firma;
+StartupWMClass=zimbraviewer
