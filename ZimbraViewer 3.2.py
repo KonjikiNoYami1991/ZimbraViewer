@@ -4,6 +4,14 @@ ZimbraViewer 3.2 - Lettore locale di archivi di posta + verifica firme digitali 
 
 CHANGELOG
 ---------
+3.2.2 (2026-11-26)
+  Aggiornato: motore delle firme del P7MReader 3.2.1 (era il 3.0). Trusted List AgID accettata solo se la sua firma
+            XAdES è integra, con il firmatario confrontato con la List of Trusted Lists della Commissione UE (LOTL);
+            stato del certificatore alla data della firma (storico ServiceHistory); controllo «Qualificazione eIDAS»
+            (QES, AdES/QC, QSCD, firma o sigillo) e marche temporali qualificate; controllo dell'uso della chiave;
+            servizi TSA/TSS-QC tra le radici delle marche; certificatore riconosciuto anche per chiave/SKI
+            (certificati CA rinnovati); certificati autofirmati spiegati; report CSV/HTML con la qualificazione
+            e accessibili. Il dettaglio e i «Dettagli mail.txt» indicano quale Trusted List è stata usata.
 3.2.1 (2026-11-26)
   Aggiunto: oltre alla posta, calendario, attività, contatti, chat, note e file dell'export, in sezioni dedicate
             della scheda (elenco, ricerca, anteprima, esportazione in .ics / .vcf / .csv, stampa in PDF):
@@ -116,7 +124,7 @@ ALLEGATI, POSTACERT.EML E P7M
 
 FIRME DIGITALI: IL P7MREADER INTEGRATO
 --------------------------------------
-- Motore ripreso da P7MReader 3.0, con le stesse regole e gli stessi esiti (Verificato / Attenzione / Non valido):
+- Motore ripreso da P7MReader 3.2.1, con le stesse regole e gli stessi esiti (Verificato / Attenzione / Non valido):
   CAdES (.p7m anche annidati, .p7s sul file accanto), PAdES (.pdf con pyhanko: integrità e modifiche dopo la firma),
   XAdES (.xml, con verifica crittografica), riepilogo FatturaPA, controfirme verificate, marca temporale verificata
   (se valida la firma si valuta a quella data), elenco dei controlli per ogni firma, nomi puliti («.pdf (1) (1).p7m» -> «.pdf»), catena di fiducia con
@@ -341,7 +349,7 @@ def prepara_webengine():
 # ==========================================
 # TEMA: PALETTE, FOGLIO DI STILE, ICONE
 # ==========================================
-VERSIONE_APP = "3.2.1"
+VERSIONE_APP = "3.2.2"
 NOME_APP = f"ZimbraViewer {VERSIONE_APP}"
 
 C = {   # palette scura "inchiostro e lavanda"
@@ -3151,7 +3159,7 @@ def esporta_elementi(elementi, percorso):
         f.write("\r\n".join(righe))
 
 # ==========================================
-# FIRME DIGITALI - MOTORE DEL P7MREADER 3.0 (integrato)
+# FIRME DIGITALI - MOTORE DEL P7MREADER 3.2.1 (integrato)
 # Codice ripreso da "P7MReader v3.py": CAdES (.p7m, .p7s), PAdES (.pdf), XAdES (.xml), riepilogo FatturaPA, report.
 # Stesse regole e stessi esiti (Verificato / Attenzione / Non valido); impostazioni lette da
 # %APPDATA%\P7MReader\impostazioni.json. Differenze: lavora sui byte (anche degli allegati delle mail),
@@ -3159,12 +3167,15 @@ def esporta_elementi(elementi, percorso):
 # ==========================================
 try:
     from asn1crypto import cms, x509, pem, tsp
+    from asn1crypto import core as asn1core
     from asn1crypto.core import Void
     from pyhanko_certvalidator import CertificateValidator, ValidationContext
     from pyhanko_certvalidator.errors import PathValidationError
     P7M_LIBRERIE_OK, P7M_LIBRERIE_ERRORE = True, ""
 except Exception as _err_librerie:
     cms = x509 = pem = tsp = None
+    class asn1core:                       # segnaposto: le classi dei QcStatements restano definibili
+        Sequence = SequenceOf = ObjectIdentifier = Any = object
     Void = type(None)
     PathValidationError = Exception
     P7M_LIBRERIE_OK, P7M_LIBRERIE_ERRORE = False, f"{type(_err_librerie).__name__}: {_err_librerie}"
@@ -3201,7 +3212,15 @@ except Exception:
 for _nome_log in ("pyhanko", "pyhanko_certvalidator"):      # gli esiti li gestisce il programma: niente traceback sul log
     logging.getLogger(_nome_log).setLevel(logging.CRITICAL)
 
-MOTORE_FIRME = "motore P7MReader 3.0"
+MOTORE_FIRME = "motore P7MReader 3.2.1"
+LINGUA = "it"
+import weakref
+
+
+def T(testo: str, **valori) -> str:
+    """Testi del motore del P7MReader: in ZimbraViewer restano in italiano, si compongono soltanto."""
+    return testo.format(**valori) if valori else testo
+
 MAX_ANNIDAMENTO = 6
 OID_TIMESTAMP_TOKEN = '1.2.840.113549.1.9.16.2.14'
 OID_COUNTER_SIGNATURE = '1.2.840.113549.1.9.6'
@@ -3463,6 +3482,7 @@ class Controllo:
     nome: str
     stato: str                        # ok / warn / error / none (solo informativo)
     dettaglio: str = ""
+    codice: str = ""                   # identificativo interno (indipendente dalla lingua): tl, qualificazione...
 
 
 @dataclass
@@ -3519,6 +3539,8 @@ class RisultatoDoc:
     verificato: bool = True
     note: List[str] = field(default_factory=list)
     origine: str = ""            # es. "allegato della mail «...»"
+    estr_esito: str = ""         # ok / duplicato / permessi / errore (estrazione, come nel P7MReader)
+    estr_dettaglio: str = ""
     non_eseguita: bool = False   # librerie mancanti: nessuna verifica
 
     def finalizza(self):
@@ -3534,10 +3556,17 @@ class RisultatoDoc:
 
 
 ETICHETTA = {"ok": "Verificato", "warn": "Attenzione", "error": "Non valido", "none": "Senza firma"}
+ETICHETTA_ESTRAZIONE = {"ok": T("Estratto"), "duplicato": T("Già presente"), "permessi": T("Permessi negati"),
+                        "errore": T("Fallito"), "": "—"}
+
+
+# come lo dice un lettore di schermo (al posto dei simboli colorati)
+STATO_CONTROLLO = {"ok": T("superato"), "warn": T("attenzione"), "error": T("non superato"), "none": T("informativo")}
+
 
 
 def etichetta_doc(r: RisultatoDoc) -> str:
-    return "Non verificato" if (r.non_eseguita or (r.stato == "none" and r.firme)) else ETICHETTA[r.stato]
+    return T("Non verificato") if (r.non_eseguita or (r.stato == "none" and r.firme)) else ETICHETTA[r.stato]
 
 
 def etichetta_firma(f: FirmaInfo) -> str:
@@ -3549,8 +3578,23 @@ GLIFO = {"ok": "✅", "warn": "⚠️", "error": "❌", "none": "⚪"}
 # le radici delle firme. Si riscarica a ogni caricamento dell'archivio (se c'è connessione) e si tiene in cache;
 # offline si usa l'ultima copia scaricata, altrimenti il TSL-IT.xml distribuito accanto al programma.
 URL_TSL = "https://eidas.agid.gov.it/TL/TSL-IT.xml"
-_TSL_TIPI_FIDUCIA = {"CA/QC", "CA/PKC", "TSA/QTST", "TSA"}
-_TSL_STATI_RITIRATI = {"withdrawn", "deprecatedatnationallevel"}
+URL_LOTL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
+_TSL_TIPI_TSA = {"TSA", "TSA/QTST", "TSA/TSS-QC", "TSA/TSS-AdESQCandQES"}
+_TSL_TIPI_FIDUCIA = {"CA/QC", "CA/PKC"} | _TSL_TIPI_TSA
+# stati in cui il servizio e' attivo: "granted" con eIDAS (dal 1/7/2016), i vecchi stati della direttiva 1999/93 prima
+_STATI_ATTIVI = {"granted", "recognisedatnationallevel", "undersupervision", "accredited", "supervisionincessation"}
+_INIZIO_EIDAS = datetime(2016, 7, 1, tzinfo=timezone.utc)
+_DATA_MINIMA = datetime(1900, 1, 1, tzinfo=timezone.utc)
+STATI_TL = {"granted": T("qualificato"), "withdrawn": T("ritirato"), "accredited": T("accreditato"),
+            "undersupervision": T("sotto vigilanza"), "supervisionincessation": T("vigilanza in cessazione"),
+            "supervisionceased": T("vigilanza cessata"), "supervisionrevoked": T("vigilanza revocata"),
+            "accreditationceased": T("accreditamento cessato"), "accreditationrevoked": T("accreditamento revocato"),
+            "recognisedatnationallevel": T("riconosciuto a livello nazionale"),
+            "deprecatedatnationallevel": T("dismesso a livello nazionale")}
+
+
+
+
 
 
 def _percorso_cache_tsl() -> str:
@@ -3566,72 +3610,297 @@ def _percorsi_tsl_distribuita() -> List[str]:
     return [os.path.join(c, "TSL-IT.xml") for c in cartelle if c]
 
 
-def leggi_tsl(dati: bytes) -> Tuple[List[Tuple[x509.Certificate, str, Optional[datetime]]], str]:
-    """Certificati dei servizi CA/TSA della Trusted List: [(certificato, tipo servizio, data ritiro o None)], descrizione.
-    Solleva un'eccezione se il file non è una Trusted List con certificati (download troncato, pagina di errore...)."""
-    radice = ET.fromstring(dati)
-    if _loc(radice.tag) != "TrustServiceStatusList":
-        raise ValueError("non e' una Trusted List")
-    numero = emessa = ""
-    for e in radice.iter():
-        nome = _loc(e.tag)
-        if nome == "TSLSequenceNumber" and not numero:
-            numero = (e.text or "").strip()
-        elif nome == "ListIssueDateTime" and not emessa:
-            emessa = (e.text or "").strip()
-    certificati = []
-    for info in radice.iter():
-        if _loc(info.tag) != "ServiceInformation":
-            continue
-        tipo = stato = inizio = ""
-        for c in info:
-            nome = _loc(c.tag)
-            if nome == "ServiceTypeIdentifier":
-                tipo = (c.text or "").strip().split("/Svctype/")[-1]
-            elif nome == "ServiceStatus":
-                stato = (c.text or "").strip().rsplit("/", 1)[-1]
-            elif nome == "StatusStartingTime":
-                inizio = (c.text or "").strip()
-        if tipo not in _TSL_TIPI_FIDUCIA:
-            continue
-        ritiro = parse_iso(inizio) if stato in _TSL_STATI_RITIRATI else None
-        for e in info.iter():
-            if _loc(e.tag) == "X509Certificate" and e.text:
-                try:
-                    certificati.append((x509.Certificate.load(base64.b64decode("".join(e.text.split()))), tipo, ritiro))
-                except Exception:
-                    pass
-    if not certificati:
-        raise ValueError("Trusted List senza certificati")
-    d = parse_iso(emessa)
-    return certificati, f"Trusted List AgID n. {numero or '?'} del {fmt_data(d) if d else emessa or '?'}"
+def _tag_locale(tag) -> str:
+    return tag.rsplit('}', 1)[-1] if isinstance(tag, str) else ""
 
 
-def carica_tsl() -> Tuple[List[Tuple[x509.Certificate, str, Optional[datetime]]], str]:
-    """Scarica la Trusted List AgID (e aggiorna la cache); senza rete usa la cache o la copia distribuita."""
-    cache = _percorso_cache_tsl()
-    try:
-        dati = scarica_url(URL_TSL, 20)
-        certificati, descr = leggi_tsl(dati)
+def _figlio_tl(el, nome):
+    if el is None:
+        return None
+    return next((c for c in el if _tag_locale(c.tag) == nome), None)
+
+
+def _figli_tl(el, nome) -> list:
+    return [c for c in el if _tag_locale(c.tag) == nome] if el is not None else []
+
+
+def _testo_tl(el) -> str:
+    return (el.text or "").strip() if el is not None else ""
+
+
+def _ultimo_pezzo(uri: str) -> str:
+    return uri.strip().rstrip("/#").rsplit("/", 1)[-1]
+
+
+def _primo_nome(el) -> str:
+    """Primo <Name> di un elemento multilingue, preferendo la lingua dell'interfaccia."""
+    nomi = _figli_tl(el, "Name")
+    for c in nomi:
+        if c.get("{http://www.w3.org/XML/1998/namespace}lang", "") == LINGUA:
+            return _testo_tl(c)
+    return _testo_tl(nomi[0]) if nomi else ""
+
+
+def _impronta_chiave(c) -> str:
+    return hashlib.sha256(c['tbs_certificate']['subject_public_key_info'].dump()).hexdigest()
+
+
+def _identificativi_chiave(c) -> set:
+    """SKI dichiarato e SHA-1 della chiave pubblica (RFC 5280, metodo 1): quello che compare negli AKI dei figli."""
+    out = set()
+    for f in (lambda: c.key_identifier, lambda: c.public_key.sha1):
         try:
-            os.makedirs(os.path.dirname(cache), exist_ok=True)
-            with open(cache + ".tmp", "wb") as f:
-                f.write(dati)
-            os.replace(cache + ".tmp", cache)
+            v = f()
+            if v:
+                out.add(bytes(v))
         except Exception:
             pass
-        return certificati, descr + " (aggiornata online)"
-    except Exception:
-        pass
-    for percorso, origine in [(cache, "copia in cache, rete non disponibile")] + \
-                             [(p, "copia distribuita, rete non disponibile") for p in _percorsi_tsl_distribuita()]:
+    return out
+
+
+@dataclass
+class IstanzaServizio:
+    """Uno stato del servizio nel tempo (ServiceInformation o ServiceHistoryInstance)."""
+    inizio: Optional[datetime]
+    stato: str
+    tipo: str
+    ambito: set = field(default_factory=set)                 # AdditionalServiceInformation: ForeSignatures, ForeSeals...
+    qualificazioni: list = field(default_factory=list)       # [(qualificatori, CriteriaList)]
+
+
+@dataclass
+class ServizioTSL:
+    tipo: str
+    nome: str
+    tsp: str
+    certificati: list
+    ski: set
+    chiavi: set
+    storia: List[IstanzaServizio]                            # dalla piu' recente
+
+    def istanza_a(self, quando) -> Optional[IstanzaServizio]:
+        """Lo stato in vigore a una certa data (None se il servizio non era ancora in lista)."""
+        if quando is None:
+            return self.storia[0] if self.storia else None
+        if quando.tzinfo is None:
+            quando = quando.replace(tzinfo=timezone.utc)
+        return next((i for i in self.storia if (i.inizio or _DATA_MINIMA) <= quando), None)
+
+    @property
+    def nome_breve(self) -> str:
+        m = re.search(r'(?:^|,)\s*CN=([^,]+)', self.nome)
+        return (m.group(1) if m else self.nome).strip() or self.tsp
+
+
+def _leggi_istanza(nodo):
+    tipo = _testo_tl(_figlio_tl(nodo, "ServiceTypeIdentifier")).split("/Svctype/")[-1]
+    ist = IstanzaServizio(inizio=parse_iso(_testo_tl(_figlio_tl(nodo, "StatusStartingTime"))),
+                          stato=_ultimo_pezzo(_testo_tl(_figlio_tl(nodo, "ServiceStatus"))), tipo=tipo)
+    certificati, ski = [], set()
+    sdi = _figlio_tl(nodo, "ServiceDigitalIdentity")
+    for e in (sdi.iter() if sdi is not None else []):
+        nome = _tag_locale(e.tag)
         try:
-            with open(percorso, "rb") as f:
-                certificati, descr = leggi_tsl(f.read())
-            return certificati, f"{descr} ({origine})"
+            if nome == "X509Certificate" and e.text:
+                certificati.append(x509.Certificate.load(base64.b64decode("".join(e.text.split()))))
+            elif nome == "X509SKI" and e.text:
+                ski.add(base64.b64decode("".join(e.text.split())))
+        except Exception:
+            pass
+    est = _figlio_tl(nodo, "ServiceInformationExtensions")
+    for e in (est.iter() if est is not None else []):
+        nome = _tag_locale(e.tag)
+        if nome == "AdditionalServiceInformation":
+            uri = _testo_tl(_figlio_tl(e, "URI"))
+            if uri:
+                ist.ambito.add(_ultimo_pezzo(uri))
+        elif nome == "QualificationElement":
+            qualificatori = {_ultimo_pezzo(q.get("uri", "")) for q in e.iter() if _tag_locale(q.tag) == "Qualifier" and q.get("uri")}
+            ist.qualificazioni.append((qualificatori, _figlio_tl(e, "CriteriaList")))
+    return tipo, _primo_nome(_figlio_tl(nodo, "ServiceName")), certificati, ski, ist
+
+
+def leggi_tsl(dati: bytes):
+    """Servizi della Trusted List con tutto lo storico, piu' i metadati della lista.
+    Solleva un'eccezione se il file non e' una Trusted List con certificati (download troncato, pagina di errore...)."""
+    radice = ET.fromstring(dati)
+    if _tag_locale(radice.tag) != "TrustServiceStatusList":
+        raise ValueError("non e' una Trusted List")
+    schema = _figlio_tl(radice, "SchemeInformation")
+    meta = {"numero": _testo_tl(_figlio_tl(schema, "TSLSequenceNumber")),
+            "emessa": parse_iso(_testo_tl(_figlio_tl(schema, "ListIssueDateTime"))),
+            "prossima": parse_iso(_testo_tl(_figlio_tl(_figlio_tl(schema, "NextUpdate"), "dateTime")))}
+    servizi = []
+    for prestatore in radice.iter():
+        if _tag_locale(prestatore.tag) != "TrustServiceProvider":
+            continue
+        nome_tsp = _primo_nome(_figlio_tl(_figlio_tl(prestatore, "TSPInformation"), "TSPName"))
+        for srv in _figli_tl(_figlio_tl(prestatore, "TSPServices"), "TSPService"):
+            info = _figlio_tl(srv, "ServiceInformation")
+            if info is None:
+                continue
+            tipo, nome, certificati, ski, ist = _leggi_istanza(info)
+            storia = [ist]
+            for h in _figli_tl(_figlio_tl(srv, "ServiceHistory"), "ServiceHistoryInstance"):
+                _t, _n, c2, s2, ist2 = _leggi_istanza(h)
+                certificati += c2
+                ski |= s2
+                storia.append(ist2)
+            storia.sort(key=lambda i: i.inizio or _DATA_MINIMA, reverse=True)
+            chiavi = set()
+            for c in certificati:
+                ski |= _identificativi_chiave(c)
+                chiavi.add(_impronta_chiave(c))
+            servizi.append(ServizioTSL(tipo, nome, nome_tsp, certificati, ski, chiavi, storia))
+    if not any(s.certificati for s in servizi):
+        raise ValueError("Trusted List senza certificati")
+    return servizi, meta
+
+
+def _firma_lista_xml(dati: bytes):
+    """Verifica la firma XAdES enveloped di una Trusted List o della LOTL. -> (esito, messaggio, certificato firmatario)"""
+    if etree is None or not HAS_CRYPTO:
+        return None, T("librerie lxml/cryptography non disponibili"), None
+    radice = etree.fromstring(dati, _parser_xml())
+    firma = next((c for c in radice if isinstance(c.tag, str) and c.tag == _DS + "Signature"), None)
+    if firma is None:
+        return False, T("la lista non è firmata"), None
+    cert = None
+    for e in firma.iter(_DS + "X509Certificate"):
+        try:
+            cert = x509.Certificate.load(base64.b64decode("".join((e.text or "").split())))
+            break
         except Exception:
             continue
-    return [], "Trusted List AgID non disponibile (nessuna rete e nessuna copia locale)"
+    if cert is None:
+        return None, T("certificato del firmatario assente"), None
+    esito, msg, copre = verifica_xmldsig(firma, radice, dati, cert)
+    if esito and not copre:
+        return False, T("la firma non copre l'intera lista"), cert
+    return esito, msg, cert
+
+
+def _scarica_url(url: str, timeout: int = 20) -> bytes:
+    return scarica_url(url, timeout)[:50 * 1024 * 1024]      # HTTPS verificato (certifi + sistema)
+
+
+def _scrivi_atomico(percorso: str, dati: bytes):
+    try:
+        os.makedirs(os.path.dirname(percorso), exist_ok=True)
+        with open(percorso + ".tmp", "wb") as f:
+            f.write(dati)
+        os.replace(percorso + ".tmp", percorso)
+    except Exception:
+        pass
+
+
+def certificati_lotl_italia(dati: bytes) -> set:
+    """Impronte SHA-256 dei certificati con cui AgID puo' firmare la Trusted List, secondo la LOTL della Commissione."""
+    radice = ET.fromstring(dati)
+    out = set()
+    for ptr in radice.iter():
+        if _tag_locale(ptr.tag) != "OtherTSLPointer":
+            continue
+        territorio = next((_testo_tl(e) for e in ptr.iter() if _tag_locale(e.tag) == "SchemeTerritory"), "")
+        if territorio != "IT":
+            continue
+        for e in ptr.iter():
+            if _tag_locale(e.tag) == "X509Certificate" and e.text:
+                try:
+                    out.add(hashlib.sha256(base64.b64decode("".join(e.text.split()))).hexdigest())
+                except Exception:
+                    pass
+    return out
+
+
+def carica_lotl(online: bool) -> Optional[set]:
+    """Certificati dei firmatari della lista italiana secondo la LOTL UE (scaricata o in cache); None se non disponibile."""
+    cache = os.path.join(cartella_cache_app(), "eu-lotl.xml")
+    fonti = []
+    if online:
+        try:
+            fonti.append(("rete", _scarica_url(URL_LOTL)))
+        except Exception:
+            pass
+    try:
+        with open(cache, "rb") as f:
+            fonti.append(("cache", f.read()))
+    except Exception:
+        pass
+    for origine, dati in fonti:
+        try:
+            if _firma_lista_xml(dati)[0] is False:      # LOTL alterata: si ignora
+                continue
+            certificati = certificati_lotl_italia(dati)
+            if not certificati:
+                continue
+            if origine == "rete":
+                _scrivi_atomico(cache, dati)
+            return certificati
+        except Exception:
+            continue
+    return None
+
+
+def autenticita_tsl(dati: bytes, firmatari_lotl: Optional[set]) -> Tuple[str, str]:
+    """-> (codice, descrizione). codice: ok / non_autenticata (LOTL assente o firma non verificabile) /
+    firmatario_ignoto (firma integra ma firmatario non nella LOTL) / alterata (firma non valida)."""
+    try:
+        esito, msg, firmatario = _firma_lista_xml(dati)
+    except Exception as e:
+        esito, msg, firmatario = None, type(e).__name__, None
+    if esito is False:
+        return "alterata", T("firma della lista NON valida: {msg}", msg=msg)
+    if esito is None or firmatario is None:
+        return "non_autenticata", T("firma della lista non verificabile ({msg})", msg=msg)
+    chi = _get(firmatario.subject, 'common_name') or _get(firmatario.subject, 'organization_name')
+    if firmatari_lotl is None:
+        return "non_autenticata", T("firma integra di «{chi}», non confrontata con la LOTL UE (non disponibile)", chi=chi)
+    if hashlib.sha256(firmatario.dump()).hexdigest() in firmatari_lotl:
+        return "ok", T("firma verificata: «{chi}», autorizzato dalla LOTL della Commissione UE", chi=chi)
+    return "firmatario_ignoto", T("firma integra ma il firmatario «{chi}» non è tra quelli indicati dalla LOTL UE", chi=chi)
+
+
+def _descrivi_tsl(meta: dict, origine: str) -> str:
+    testo = T("Trusted List AgID n. {numero} del {data}", numero=meta.get("numero") or "?",
+              data=fmt_data(meta["emessa"]) if meta.get("emessa") else "?")
+    prossima = meta.get("prossima")
+    if prossima and prossima < datetime.now(timezone.utc):
+        testo += " · " + T("SCADUTA il {data}", data=fmt_data(prossima))
+    return f"{testo} ({origine})"
+
+
+def carica_tsl(online: bool):
+    """Scarica la Trusted List AgID (e aggiorna la cache); senza rete, o con online=False, usa la cache
+    o la copia distribuita. -> (servizi, metadati, descrizione breve, dettaglio sull'autenticita')"""
+    cache = _percorso_cache_tsl()
+    firmatari = carica_lotl(online)
+    rifiuti = []
+    if online:
+        try:
+            dati = _scarica_url(URL_TSL)
+            servizi, meta = leggi_tsl(dati)
+            codice, autenticita = autenticita_tsl(dati, firmatari)
+            if codice in ("ok", "non_autenticata"):
+                _scrivi_atomico(cache, dati)
+                return servizi, meta, _descrivi_tsl(meta, T("aggiornata online")), autenticita
+            rifiuti.append(T("copia scaricata scartata: {motivo}", motivo=autenticita))
+        except Exception:
+            pass
+    motivo = T("rete non disponibile") if online else T("aggiornamento online in corso")
+    for percorso, origine in [(cache, T("copia in cache"))] + [(p, T("copia distribuita")) for p in _percorsi_tsl_distribuita()]:
+        try:
+            with open(percorso, "rb") as f:
+                dati = f.read()
+            servizi, meta = leggi_tsl(dati)
+            codice, autenticita = autenticita_tsl(dati, firmatari)
+            if codice == "alterata":                   # una copia locale manomessa non si usa mai
+                rifiuti.append(f"{origine}: {autenticita}")
+                continue
+            return servizi, meta, _descrivi_tsl(meta, f"{origine}, {motivo}"), "\n".join([autenticita] + rifiuti)
+        except Exception:
+            continue
+    return [], {}, T("Trusted List AgID non disponibile (nessuna rete e nessuna copia locale valida)"), "\n".join(rifiuti)
 
 
 class ArchivioFiducia:
@@ -3642,23 +3911,31 @@ class ArchivioFiducia:
         self.radici: List[x509.Certificate] = []
         self.intermedi: List[x509.Certificate] = []
         self.hash_radici = set()
-        self.tsl = {}                  # sha256 -> (tipo servizio, data ritiro o None) dei certificati della Trusted List
+        self.servizi: List[ServizioTSL] = []
+        self.per_chiave, self.per_ski = {}, {}         # indici dei servizi della Trusted List
+        self.tsl_meta = {}
         self.tsl_descrizione = ""
+        self.tsl_dettaglio = ""
+        self._tsl_letta = None
         self.cache_http = {}
         self.cache_validazione = {}
-        self._lock_chiavi = {}
+        self._lock_chiavi = weakref.WeakKeyDictionary()
         self.ricarica()
 
     def lock_chiave(self, chiave):
-        """Un lock per certificato: lo stesso firmatario su mille file si valida una volta sola, anche tra thread diversi."""
-        with self.lock:
-            return self._lock_chiavi.setdefault(chiave, threading.Lock())
+        """Un lock asincrono per certificato: lo stesso firmatario su mille file si valida una volta sola."""
+        # per ciclo asyncio (chiave debole): un lock legato a un ciclo chiuso non deve mai finire in uno nuovo
+        with self.lock:                  # in ZimbraViewer le verifiche girano in più thread, ognuno col suo ciclo
+            locks = self._lock_chiavi.setdefault(asyncio.get_running_loop(), {})
+            if chiave not in locks:
+                locks[chiave] = asyncio.Lock()
+            return locks[chiave]
 
     @staticmethod
     def _carica_file(percorso: str) -> List[x509.Certificate]:
         with open(percorso, 'rb') as f:
             dati = f.read()
-        if b'-----BEGIN' in dati:     # PEM, anche con commenti in testa (raccolte delle distribuzioni Linux)
+        if b'-----BEGIN' in dati:     # PEM, anche con commenti in testa
             return [x509.Certificate.load(der) for _, _, der in pem.unarmor(dati, multiple=True)]
         return [x509.Certificate.load(dati)]
 
@@ -3692,12 +3969,21 @@ class ArchivioFiducia:
                 pass
         return radici
 
-    def ricarica(self):
-        radici, intermedi, tsl = [], [], {}
-        certificati_tsl, descrizione_tsl = carica_tsl()
-        for c, tipo, ritiro in certificati_tsl:
-            radici.append(c)
-            tsl[hashlib.sha256(c.dump()).hexdigest()] = (tipo, ritiro)
+    def ricarica(self, scarica_tsl: bool = False):
+        """Ricostruisce l'archivio. La Trusted List si scarica solo con scarica_tsl (all'avvio, in sottofondo);
+        altrimenti si riusa quella gia' letta o la copia locale, cosi' l'interfaccia non aspetta la rete."""
+        radici, intermedi = [], []
+        if scarica_tsl or self._tsl_letta is None:
+            self._tsl_letta = carica_tsl(online=scarica_tsl)
+        servizi, meta, descrizione, dettaglio = self._tsl_letta
+        per_chiave, per_ski = {}, {}
+        for s in servizi:
+            if s.tipo in _TSL_TIPI_FIDUCIA:
+                radici.extend(s.certificati)
+            for k in s.chiavi:
+                per_chiave.setdefault(k, []).append(s)
+            for k in s.ski:
+                per_ski.setdefault(k, []).append(s)
         if sys.platform == "win32":
             for store, dest in (("ROOT", radici), ("CA", intermedi)):
                 try:
@@ -3725,22 +4011,43 @@ class ArchivioFiducia:
         with self.lock:
             self.radici, self.intermedi = finali, intermedi
             self.hash_radici = visti
-            self.tsl, self.tsl_descrizione = tsl, descrizione_tsl
+            self.servizi, self.per_chiave, self.per_ski = servizi, per_chiave, per_ski
+            self.tsl_meta, self.tsl_descrizione, self.tsl_dettaglio = meta, descrizione, dettaglio
             self.cache_validazione.clear()
 
-    def ancora_tsl(self, cert, extra):
-        """Primo certificato della catena (il firmatario escluso) presente nella Trusted List, o None."""
+    def _servizi_di(self, c) -> List[ServizioTSL]:
+        out = list(self.per_chiave.get(_impronta_chiave(c), []))
+        for k in _identificativi_chiave(c):
+            out += [s for s in self.per_ski.get(k, []) if s not in out]
+        return out
+
+    def trova_servizi(self, cert, extra, includi_se_stesso=False) -> Tuple[List[ServizioTSL], Optional[x509.Certificate]]:
+        """Servizi della Trusted List che hanno emesso il certificato: si risale la catena e si confronta la chiave
+        (impronta della chiave pubblica o SKI/AKI), cosi' anche un certificato CA rinnovato viene riconosciuto.
+        includi_se_stesso: per le TSA, il cui certificato puo' essere direttamente l'identita' del servizio."""
+        pool = list(extra) + self.intermedi + self.radici
+        if includi_se_stesso:
+            trovati = self._servizi_di(cert)
+            if trovati:
+                return trovati, cert
         corrente = cert
         for _ in range(8):
-            nxt = self._cerca_emittente(corrente, list(extra) + self.intermedi + self.radici)
-            if nxt is None:
-                return None
-            if hashlib.sha256(nxt.dump()).hexdigest() in self.tsl:
-                return nxt
-            if nxt.issuer == nxt.subject:
-                return None
-            corrente = nxt
-        return None
+            emittente = self._cerca_emittente(corrente, pool)
+            try:
+                aki = corrente.authority_key_identifier
+            except Exception:
+                aki = None
+            if aki and bytes(aki) in self.per_ski:
+                return list(self.per_ski[bytes(aki)]), emittente
+            if emittente is None:
+                return [], None
+            trovati = self._servizi_di(emittente)
+            if trovati:
+                return trovati, emittente
+            if emittente.issuer == emittente.subject:
+                return [], None
+            corrente = emittente
+        return [], None
 
     def scarica(self, url: str) -> Optional[bytes]:
         if url in self.cache_http:
@@ -3748,7 +4055,7 @@ class ArchivioFiducia:
         dati = None
         if url.lower().startswith(("http://", "https://")):
             try:
-                dati = scarica_url(url, 6)
+                dati = _scarica_url(url, timeout=6)
             except Exception:
                 dati = None
         self.cache_http[url] = dati
@@ -3824,6 +4131,23 @@ class ArchivioFiducia:
 
 _ARCHIVIO = None
 _ARCHIVIO_LOCK = threading.Lock()
+
+
+class _ArchivioPigro:
+    """Il codice del P7MReader usa ARCHIVIO: qui l'archivio vero si costruisce solo quando serve."""
+    def __getattr__(self, nome):
+        return getattr(archivio_fiducia(), nome)
+
+
+ARCHIVIO = _ArchivioPigro()
+
+
+def prepara_archivio_fiducia():
+    """All'avvio, in sottofondo: archivio dalla copia locale, poi Trusted List e LOTL aggiornate dalla rete."""
+    try:
+        archivio_fiducia().ricarica(scarica_tsl=True)
+    except Exception:
+        pass
 
 def archivio_fiducia():
     """Archivio delle radici attendibili, caricato al primo uso (non rallenta l'avvio del programma)."""
@@ -3992,14 +4316,14 @@ def _verifica_firma_grezza(chiave, firma: bytes, dati: bytes, sig_algo, classe_h
 def verifica_integrita(signer_info, cert, payload: Optional[bytes]) -> Tuple[Optional[bool], str]:
     """Controlla digest del contenuto e firma. (True/False/None, messaggio)"""
     if not HAS_CRYPTO:
-        return None, "libreria 'cryptography' non disponibile"
+        return None, T("libreria 'cryptography' non disponibile")
     if payload is None:
-        return None, "firma detached: documento originale non disponibile"
+        return None, T("firma detached: documento originale non disponibile")
     try:
         algo = signer_info['digest_algorithm']['algorithm'].native
         classe_hash = _HASH_CLASSI.get(algo)
         if classe_hash is None:
-            return None, f"algoritmo di digest '{algo}' non supportato"
+            return None, T("algoritmo di digest '{algo}' non supportato", algo=algo)
         sa = signer_info['signed_attrs']
         if isinstance(sa, Void):
             candidati = [payload]
@@ -4010,9 +4334,9 @@ def verifica_integrita(signer_info, cert, payload: Optional[bytes]) -> Tuple[Opt
                     md = a['values'][0].native
                     break
             if md is None:
-                return False, "attributo message-digest mancante"
+                return False, T("attributo message-digest mancante")
             if hashlib.new(algo, payload).digest() != md:
-                return False, "l'impronta del contenuto non corrisponde: documento alterato dopo la firma"
+                return False, T("l'impronta del contenuto non corrisponde: documento alterato dopo la firma")
             # prima la codifica originale (alcuni software non ordinano il SET), poi quella DER canonica
             candidati = [b'\x31' + sa.dump()[1:]]
             canonica = b'\x31' + sa.dump(force=True)[1:]
@@ -4023,19 +4347,19 @@ def verifica_integrita(signer_info, cert, payload: Optional[bytes]) -> Tuple[Opt
         for dati in candidati:
             try:
                 _verifica_firma_grezza(chiave, firma, dati, signer_info['signature_algorithm'], classe_hash)
-                return True, "impronta e firma crittografica verificate: documento integro"
+                return True, T("impronta e firma crittografica verificate: documento integro")
             except InvalidSignature:
                 continue
-        return False, "firma crittografica non valida: documento alterato o firma corrotta"
+        return False, T("firma crittografica non valida: documento alterato o firma corrotta")
     except NotImplementedError as e:
-        return None, f"algoritmo di firma '{e}' non supportato"
+        return None, T("algoritmo di firma '{algo}' non supportato", algo=e)
     except Exception as e:
-        return None, f"verifica non eseguibile ({type(e).__name__})"
+        return None, T("verifica non eseguibile ({errore})", errore=type(e).__name__)
 
 
 def verifica_legame_certificato(signer_info, cert) -> Controllo:
     """Attributo ESS signing-certificate: lega la firma proprio a quel certificato."""
-    nome = "Legame firma-certificato"
+    nome = T("Legame firma-certificato")
     try:
         sa = signer_info['signed_attrs']
         if not isinstance(sa, Void):
@@ -4045,11 +4369,11 @@ def verifica_legame_certificato(signer_info, cert) -> Controllo:
                     primo = a['values'][0]['certs'][0]
                     algo = 'sha1' if t == 'signing_certificate' else primo['hash_algorithm']['algorithm'].native
                     if hashlib.new(algo, cert.dump()).digest() == primo['cert_hash'].native:
-                        return Controllo(nome, "ok", "l'attributo signing-certificate corrisponde al certificato usato")
-                    return Controllo(nome, "error", "l'attributo signing-certificate indica un certificato diverso da quello usato")
+                        return Controllo(nome, "ok", T("l'attributo signing-certificate corrisponde al certificato usato"))
+                    return Controllo(nome, "error", T("l'attributo signing-certificate indica un certificato diverso da quello usato"))
     except Exception as e:
-        return Controllo(nome, "none", f"attributo non leggibile ({type(e).__name__})")
-    return Controllo(nome, "none", "attributo signing-certificate assente")
+        return Controllo(nome, "none", T("attributo non leggibile ({errore})", errore=type(e).__name__))
+    return Controllo(nome, "none", T("attributo signing-certificate assente"))
 
 
 def token_marca(signer_info):
@@ -4065,7 +4389,7 @@ def token_marca(signer_info):
 
 
 async def verifica_marca(token, dati_marcati: Optional[bytes]) -> Tuple[Optional[bool], Optional[datetime], str, str]:
-    """Verifica una marca RFC 3161: impronta dei dati marcati, firma del token, certificato TSA.
+    """Verifica una marca RFC 3161: impronta dei dati marcati, firma del token, certificato TSA (e se e' qualificata).
     -> (valida, istante, TSA, spiegazione)"""
     quando, tsa = None, ""
     try:
@@ -4077,25 +4401,27 @@ async def verifica_marca(token, dati_marcati: Optional[bytes]) -> Tuple[Optional
         imprint = info['message_imprint']
         algo = imprint['hash_algorithm']['algorithm'].native
         if dati_marcati is not None and hashlib.new(algo, dati_marcati).digest() != imprint['hashed_message'].native:
-            return False, quando, tsa, "l'impronta della marca non corrisponde alla firma: marca non valida"
+            return False, quando, tsa, T("l'impronta della marca non corrisponde alla firma: marca non valida")
         si = sd['signer_infos'][0]
         certs = certificati_da_sd(sd)
         cert = trova_cert_signer(si, certs)
         if cert is None:
-            return None, quando, tsa, "certificato della TSA non incluso nella marca"
+            return None, quando, tsa, T("certificato della TSA non incluso nella marca")
         tsa = _get(cert.subject, 'common_name') or _get(cert.subject, 'organization_name')
         integra, msg = verifica_integrita(si, cert, contenuto)
         if integra is False:
-            return False, quando, tsa, f"firma della marca non valida ({msg})"
+            return False, quando, tsa, T("firma della marca non valida ({msg})", msg=msg)
         if integra is None:
-            return None, quando, tsa, f"firma della marca non verificabile ({msg})"
+            return None, quando, tsa, T("firma della marca non verificabile ({msg})", msg=msg)
         controlli = await valida_certificato(cert, certs, quando, tsa=True)
         peggiore = next((c for c in controlli if c.stato == "error"), None)
         if peggiore is not None:
-            return False, quando, tsa, f"certificato TSA non attendibile: {peggiore.dettaglio}"
-        return True, quando, tsa, f"marca valida emessa da {tsa or 'TSA'} il {fmt_dt(quando)}"
+            return False, quando, tsa, T("certificato TSA non attendibile: {motivo}", motivo=peggiore.dettaglio)
+        if any(c.codice == "qualificazione" and c.stato == "ok" for c in controlli):
+            return True, quando, tsa, T("marca temporale qualificata eIDAS emessa da {tsa} il {data}", tsa=tsa or "TSA", data=fmt_dt(quando))
+        return True, quando, tsa, T("marca valida emessa da {tsa} il {data}", tsa=tsa or "TSA", data=fmt_dt(quando))
     except Exception as e:
-        return None, quando, tsa, f"marca non verificabile ({type(e).__name__})"
+        return None, quando, tsa, T("marca non verificabile ({errore})", errore=type(e).__name__)
 
 def popola_da_cert(fi: FirmaInfo, cert: x509.Certificate):
     fi.cert_der = cert.dump()
@@ -4113,38 +4439,224 @@ def popola_da_cert(fi: FirmaInfo, cert: x509.Certificate):
         pass
 
 
-_QC_CONFORME = bytes.fromhex("0606040 08E460101".replace(" ", ""))
-_QC_QSCD = bytes.fromhex("0606040 08E460104".replace(" ", ""))
+OID_QC_STATEMENTS = '1.3.6.1.5.5.7.1.3'
+_QC_COMPLIANCE, _QC_SSCD, _QC_TYPE = '0.4.0.1862.1.1', '0.4.0.1862.1.4', '0.4.0.1862.1.6'
+_QC_TIPI = {'0.4.0.1862.1.6.1': 'esign', '0.4.0.1862.1.6.2': 'eseal', '0.4.0.1862.1.6.3': 'web'}
+# policy dei certificati qualificati: EN 319 411-2 (qcp-n, qcp-l, qcp-n-qscd, qcp-l-qscd, qcp-w) e TS 101 456 (QCP+, QCP)
+_POLICY_QC = {'0.4.0.194112.1.0': ('esign', False), '0.4.0.194112.1.1': ('eseal', False),
+              '0.4.0.194112.1.2': ('esign', True), '0.4.0.194112.1.3': ('eseal', True),
+              '0.4.0.194112.1.4': ('web', False), '0.4.0.1456.1.1': ('', True), '0.4.0.1456.1.2': ('', False)}
+_AMBITO_TIPO = {"ForeSignatures": "esign", "ForeSeals": "eseal", "ForWebSiteAuthentication": "web"}
+_KU_TL = {"digitalSignature": "digital_signature", "nonRepudiation": "non_repudiation", "keyEncipherment": "key_encipherment",
+          "dataEncipherment": "data_encipherment", "keyAgreement": "key_agreement", "keyCertSign": "key_cert_sign",
+          "crlSign": "crl_sign", "encipherOnly": "encipher_only", "decipherOnly": "decipher_only"}
 
 
-def controllo_tipo_certificato(cert) -> Controllo:
-    der = cert.dump()
-    if _QC_CONFORME in der:
-        testo = "certificato qualificato" + (" su dispositivo sicuro (QSCD)" if _QC_QSCD in der else "")
-    else:
-        testo = "certificato non dichiarato come qualificato"
+class _QcStatement(asn1core.Sequence):
+    _fields = [('statement_id', asn1core.ObjectIdentifier), ('statement_info', asn1core.Any, {'optional': True})]
+
+
+class _QcStatements(asn1core.SequenceOf):
+    _child_spec = _QcStatement
+
+
+class _ListaOid(asn1core.SequenceOf):
+    _child_spec = asn1core.ObjectIdentifier
+
+
+def info_qc(cert) -> dict:
+    """Cosa dichiara il certificato: qualificato, su QSCD, per firma/sigillo/web, policy e usi della chiave."""
+    out = {"qc": False, "qscd": False, "tipi": set(), "policy": set(), "ku": set()}
     try:
-        ku = cert.key_usage_value
-        if ku is not None and 'non_repudiation' in ku.native:
-            testo += ", abilitato alla non ripudiabilità"
+        for ext in cert['tbs_certificate']['extensions']:
+            if ext['extn_id'].dotted != OID_QC_STATEMENTS:
+                continue
+            for st in _QcStatements.load(ext['extn_value'].contents):
+                oid = st['statement_id'].dotted
+                if oid == _QC_COMPLIANCE:
+                    out["qc"] = True
+                elif oid == _QC_SSCD:
+                    out["qscd"] = True
+                elif oid == _QC_TYPE and not isinstance(st['statement_info'], Void):
+                    out["tipi"] |= {_QC_TIPI.get(t.dotted, "") for t in _ListaOid.load(st['statement_info'].dump())}
     except Exception:
         pass
-    return Controllo("Tipo di certificato", "none", testo)
+    try:
+        for p in (cert.certificate_policies_value or []):
+            oid = p['policy_identifier'].dotted
+            out["policy"].add(oid)
+            if oid in _POLICY_QC:
+                tipo, qscd = _POLICY_QC[oid]
+                out["qc"] = True
+                out["qscd"] = out["qscd"] or qscd
+                if tipo:
+                    out["tipi"].add(tipo)
+    except Exception:
+        pass
+    try:
+        ku = cert.key_usage_value
+        out["ku"] = set(ku.native) if ku is not None else set()
+    except Exception:
+        pass
+    out["tipi"].discard("")
+    return out
+
+
+def _criteri_soddisfatti(criteri, info: dict) -> bool:
+    """CriteriaList di una QualificationElement (TS 119 612, 5.5.9.2): KeyUsage, PolicySet e liste annidate.
+    Un criterio che non si sa valutare conta come non soddisfatto: meglio non applicare un qualificatore che sbagliarlo."""
+    if criteri is None:
+        return True
+    esiti = []
+    for c in criteri:
+        nome = _tag_locale(c.tag)
+        if nome in ("Description", ""):
+            continue
+        if nome == "KeyUsage":
+            esiti.append(all((_KU_TL.get(b.get("name", ""), "?") in info["ku"]) == (_testo_tl(b).lower() == "true")
+                             for b in c if _tag_locale(b.tag) == "KeyUsageBit"))
+        elif nome == "PolicySet":
+            oid = {_testo_tl(i).replace("urn:oid:", "") for i in c.iter() if _tag_locale(i.tag) == "Identifier"}
+            esiti.append(bool(oid) and oid <= info["policy"])
+        elif nome == "CriteriaList":
+            esiti.append(_criteri_soddisfatti(c, info))
+        else:
+            esiti.append(False)
+    modo = criteri.get("assert", "all")
+    if modo == "atLeastOne":
+        return any(esiti)
+    if modo == "none":
+        return not any(esiti)
+    return all(esiti)
+
+
+def controllo_qualificazione(cert, servizi: List[ServizioTSL], quando, tsa=False) -> Controllo:
+    """Qualificazione eIDAS alla data della firma (o della marca): QES, sigillo qualificato, AdES/QC, non qualificata."""
+    nome, data = T("Qualificazione eIDAS"), fmt_data(quando)
+
+    def esito(stato, testo):
+        return Controllo(nome, stato, testo, "qualificazione")
+
+    def attivi(tipi):
+        return [(s, i) for s in servizi if s.tipo in tipi and (i := s.istanza_a(quando)) is not None and i.stato in _STATI_ATTIVI]
+
+    if tsa:
+        if attivi({"TSA/QTST"}):
+            return esito("ok", T("servizio di marca temporale qualificato (TSA/QTST) attivo al {data}", data=data))
+        return esito("none", T("marca temporale non qualificata secondo la Trusted List"))
+    info = info_qc(cert)
+    if not any(s.tipo == "CA/QC" for s in servizi):
+        if info["qc"]:
+            return esito("warn", T("il certificato si dichiara qualificato, ma il certificatore non è tra i servizi "
+                                   "qualificati della Trusted List"))
+        return esito("none", T("certificato non qualificato: firma elettronica avanzata"))
+    servizio = attivi({"CA/QC"})
+    if not servizio:
+        return esito("warn", T("al {data} il servizio qualificato del certificatore non era attivo: "
+                               "la firma non è qualificata", data=data))
+    _s, ist = servizio[0]
+    qc, qscd, tipi, remota = info["qc"], info["qscd"], set(info["tipi"]), False
+    for qualificatori, criteri in ist.qualificazioni:
+        if not _criteri_soddisfatti(criteri, info):
+            continue
+        if "NotQualified" in qualificatori:
+            qc = False
+        if "QCStatement" in qualificatori:
+            qc = True
+        if qualificatori & {"QCWithSSCD", "QCWithQSCD"}:
+            qscd = True
+        if "QCQSCDManagedOnBehalf" in qualificatori:
+            qscd = remota = True
+        if qualificatori & {"QCNoSSCD", "QCNoQSCD"}:
+            qscd = False
+        for q, t in (("QCForESig", "esign"), ("QCForESeal", "eseal"), ("QCForWSA", "web")):
+            if q in qualificatori:
+                tipi = {t}
+    ambito = {_AMBITO_TIPO[a] for a in ist.ambito if a in _AMBITO_TIPO}
+    if not tipi:                       # tipo non dichiarato: lo dice il campo d'azione del servizio (prima di eIDAS: firma)
+        tipi = ambito if len(ambito) == 1 else ({"esign"} if not ambito else set())
+    elif ambito and not tipi & ambito:
+        qc = False                     # il servizio non e' qualificato per quel tipo di certificato
+    if not qc:
+        if info["qc"]:
+            return esito("warn", T("la Trusted List non conferma la qualificazione dichiarata dal certificato"))
+        return esito("none", T("certificato non qualificato secondo la Trusted List"))
+    dispositivo = T("dispositivo qualificato gestito dal prestatore (firma remota)") if remota else T("dispositivo qualificato (QSCD)")
+    if "esign" in tipi:
+        if qscd:
+            return esito("ok", T("firma elettronica qualificata (QES): certificato qualificato su {dispositivo}", dispositivo=dispositivo))
+        return esito("none", T("firma elettronica avanzata con certificato qualificato (AdES/QC): nessun dispositivo qualificato"))
+    if "eseal" in tipi:
+        if qscd:
+            return esito("ok", T("sigillo elettronico qualificato: certificato qualificato su {dispositivo}", dispositivo=dispositivo))
+        return esito("none", T("sigillo elettronico avanzato con certificato qualificato (AdES/QC): nessun dispositivo qualificato"))
+    if "web" in tipi:
+        return esito("warn", T("certificato qualificato per siti web (QWAC): non è destinato alla firma di documenti"))
+    return esito("none", T("certificato qualificato di tipo non determinabile dalla Trusted List"))
+
+
+def controlli_trusted_list(cert, extra, quando, tsa=False) -> List[Controllo]:
+    """Catena, stato del certificatore nella Trusted List alla data indicata (storico compreso) e qualificazione."""
+    servizi, ancora = ARCHIVIO.trova_servizi(cert, extra, includi_se_stesso=tsa)
+    rilevanti = [s for s in servizi if (s.tipo in _TSL_TIPI_TSA if tsa else s.tipo.startswith("CA/"))] or servizi
+    nome_tl, data = T("Trusted List AgID"), fmt_data(quando)
+    out = []
+    if not rilevanti:
+        out.append(Controllo(T("Catena di fiducia"), "ok", T("verificata sull'archivio di sistema o sulle CA aggiunte")))
+        out.append(Controllo(nome_tl, "none", T("certificatore non presente nella lista"), "tl"))
+    else:
+        nome_ca = ((_get(ancora.subject, 'common_name') or _get(ancora.subject, 'organization_name')) if ancora is not None
+                   else "") or rilevanti[0].nome_breve
+        out.append(Controllo(T("Catena di fiducia"), "ok", T("verificata fino a «{nome}»", nome=nome_ca)))
+        attivi = [(s, i) for s in rilevanti if (i := s.istanza_a(quando)) is not None and i.stato in _STATI_ATTIVI]
+        if attivi:
+            s, i = attivi[0]
+            tl = Controllo(nome_tl, "ok", T("«{tsp}»: servizio {tipo} {stato} al {data}", tsp=s.tsp or s.nome_breve,
+                                            tipo=s.tipo, stato=STATI_TL.get(i.stato, i.stato), data=data), "tl")
+        else:
+            s = rilevanti[0]
+            i = s.istanza_a(quando)
+            if i is None:
+                tl = Controllo(nome_tl, "warn", T("al {data} il servizio «{nome}» non era ancora nella lista",
+                                                  data=data, nome=s.nome_breve), "tl")
+            else:
+                tl = Controllo(nome_tl, "warn", T("«{tsp}»: al {data} il servizio {tipo} risultava {stato} (dal {dal})",
+                                                  tsp=s.tsp or s.nome_breve, data=data, tipo=s.tipo,
+                                                  stato=STATI_TL.get(i.stato, i.stato), dal=fmt_data(i.inizio)), "tl")
+        prossima = ARCHIVIO.tsl_meta.get("prossima")
+        if prossima and prossima < datetime.now(timezone.utc):
+            tl.stato = "warn" if tl.stato == "ok" else tl.stato
+            tl.dettaglio += " — " + T("lista scaduta il {data}: aggiornala dalle Impostazioni", data=fmt_data(prossima))
+        out.append(tl)
+    out.append(controllo_qualificazione(cert, rilevanti, quando, tsa))
+    return out
+
+
+def controllo_uso_chiave(cert) -> Controllo:
+    nome = T("Uso della chiave")
+    ku = info_qc(cert)["ku"]
+    if not ku:
+        return Controllo(nome, "none", T("estensione keyUsage assente"))
+    if "non_repudiation" in ku:
+        return Controllo(nome, "ok", T("chiave abilitata alla firma con non ripudio"))
+    if "digital_signature" in ku:
+        return Controllo(nome, "ok", T("chiave abilitata alla firma digitale (senza non ripudio)"))
+    return Controllo(nome, "error", T("il certificato non è abilitato alla firma (usi: {usi})", usi=", ".join(sorted(ku))))
 
 
 def controllo_algoritmi(fi: FirmaInfo, cert) -> Controllo:
     deboli = []
     if fi.algo_hash.lower() in ('md5', 'md2', 'sha1'):
-        deboli.append(f"impronta {fi.algo_hash.upper()}")
+        deboli.append(T("impronta {algo}", algo=fi.algo_hash.upper()))
     try:
         if cert.public_key.algorithm == 'rsa' and cert.public_key.bit_size < 2048:
-            deboli.append(f"chiave RSA a {cert.public_key.bit_size} bit")
+            deboli.append(T("chiave RSA a {bit} bit", bit=cert.public_key.bit_size))
     except Exception:
         pass
     testo = " / ".join(x for x in (fi.algo_hash, fi.algo_firma) if x)
     if deboli:
-        return Controllo("Algoritmi", "warn", "algoritmi oggi considerati deboli: " + ", ".join(deboli))
-    return Controllo("Algoritmi", "ok", testo or "non indicati")
+        return Controllo(T("Algoritmi"), "warn", T("algoritmi oggi considerati deboli: {elenco}", elenco=", ".join(deboli)))
+    return Controllo(T("Algoritmi"), "ok", testo or T("non indicati"))
 
 
 def controllo_tempi(fi: FirmaInfo) -> Optional[Controllo]:
@@ -4153,16 +4665,18 @@ def controllo_tempi(fi: FirmaInfo) -> Optional[Controllo]:
         return None
     if d.tzinfo is None:
         d = d.replace(tzinfo=timezone.utc)
+    nome = T("Data di firma")
     if d > datetime.now(timezone.utc) + timedelta(minutes=5):
-        return Controllo("Data di firma", "warn", f"la data dichiarata ({fmt_dt(d)}) è nel futuro")
+        return Controllo(nome, "warn", T("la data dichiarata ({data}) è nel futuro", data=fmt_dt(d)))
     if fi.valido_dal and d < fi.valido_dal:
-        return Controllo("Data di firma", "warn", f"la data dichiarata ({fmt_dt(d)}) precede l'inizio di validità del certificato")
+        return Controllo(nome, "warn", T("la data dichiarata ({data}) precede l'inizio di validità del certificato", data=fmt_dt(d)))
     if fi.valido_al and d > fi.valido_al:
-        return Controllo("Data di firma", "warn", f"la data dichiarata ({fmt_dt(d)}) è successiva alla scadenza del certificato")
+        return Controllo(nome, "warn", T("la data dichiarata ({data}) è successiva alla scadenza del certificato", data=fmt_dt(d)))
     return None
 
 
-async def _valida_cert_reale(cert, certs_busta, momento_firma, moment, marca, tsa) -> List[Controllo]:
+async def _valida_cert_reale(cert, certs_busta, momento_firma, moment, marca, tsa):
+    """Validazione del percorso (costosa, con rete): -> (controlli prima, controlli dopo, catena estesa, percorso valido)"""
     c: List[Controllo] = []
     ora = datetime.now(timezone.utc)
     try:
@@ -4173,11 +4687,12 @@ async def _valida_cert_reale(cert, certs_busta, momento_firma, moment, marca, ts
     scaduto = bool(na and na < ora)
     futuro = bool(nb and nb > ora)
     revoca_attiva = bool(IMP["revoca"])
-    extra = await asyncio.to_thread(archivio_fiducia().completa_catena, cert, list(certs_busta))
-    ctx = ValidationContext(trust_roots=list(archivio_fiducia().radici), other_certs=list(archivio_fiducia().intermedi) + extra,
+    extra = await asyncio.to_thread(ARCHIVIO.completa_catena, cert, list(certs_busta))
+    ctx = ValidationContext(trust_roots=list(ARCHIVIO.radici), other_certs=list(ARCHIVIO.intermedi) + extra,
                             allow_fetching=revoca_attiva, revocation_mode="soft-fail", moment=moment,
                             # a una data passata OCSP/CRL sono per forza successive: vanno accettate lo stesso
                             retroactive_revinfo=bool(moment))
+    n_validita, n_catena, n_revoca = T("Validità del certificato"), T("Catena di fiducia"), T("Revoca")
     try:
         validatore = CertificateValidator(cert, validation_context=ctx)
         if tsa:
@@ -4190,71 +4705,61 @@ async def _valida_cert_reale(cert, certs_busta, momento_firma, moment, marca, ts
         if 'Revoked' in nome_err:
             quando = getattr(e, 'revocation_dt', None)
             motivo = getattr(getattr(e, 'reason', None), 'human_friendly', '')
-            c.append(Controllo("Revoca", "error", "certificato REVOCATO" + (f" il {fmt_dt(quando)}" if quando else "")
+            c.append(Controllo(n_revoca, "error", T("certificato REVOCATO") + (" " + T("il {data}", data=fmt_dt(quando)) if quando else "")
                                + (f" ({motivo})" if motivo else "")))
         elif futuro:
-            c.append(Controllo("Validità del certificato", "error", f"non ancora valido (dal {fmt_data(nb)})"))
+            c.append(Controllo(n_validita, "error", T("non ancora valido (dal {data})", data=fmt_data(nb))))
         elif 'Expired' in nome_err or (scaduto and not moment):
-            c.append(Controllo("Validità del certificato", "error", f"scaduto il {fmt_data(na)}, nessuna data utile per valutarlo"))
+            c.append(Controllo(n_validita, "error", T("scaduto il {data}, nessuna data utile per valutarlo", data=fmt_data(na))))
+        elif 'self-signed' in msg.lower() or 'self signed' in msg.lower():
+            c.append(Controllo(n_catena, "error", T("certificato autofirmato: nessuna autorità di certificazione attendibile "
+                                                    "ne garantisce l'identità")))
         elif isinstance(e, PathValidationError) or 'PathBuilding' in nome_err or 'Validation' in nome_err:
-            radice = archivio_fiducia().radice_catena(cert, extra)
-            if radice is not None and hashlib.sha256(radice.dump()).hexdigest() not in archivio_fiducia().hash_radici:
+            radice = ARCHIVIO.radice_catena(cert, extra)
+            if radice is not None and hashlib.sha256(radice.dump()).hexdigest() not in ARCHIVIO.hash_radici:
                 nome_radice = _get(radice.subject, 'common_name') or _get(radice.subject, 'organization_name')
-                c.append(Controllo("Catena di fiducia", "warn", f"catena completa fino a «{nome_radice}», radice non presente "
-                                   "tra quelle attendibili (si può aggiungere in Impostazioni)"))
+                c.append(Controllo(n_catena, "warn", T("catena completa fino a «{nome}», radice non presente tra quelle "
+                                                       "attendibili (si può aggiungere in Impostazioni)", nome=nome_radice)))
             else:
-                emittente = _get(cert.issuer, 'common_name') or _get(cert.issuer, 'organization_name') or "sconosciuto"
+                emittente = _get(cert.issuer, 'common_name') or _get(cert.issuer, 'organization_name') or T("sconosciuto")
                 if 'PathBuilding' in nome_err:
-                    c.append(Controllo("Catena di fiducia", "error", f"l'emittente «{emittente}» non è tra le autorità attendibili "
-                                       "(Trusted List AgID, archivio di sistema, CA aggiunte)"))
+                    c.append(Controllo(n_catena, "error", T("l'emittente «{nome}» non è tra le autorità attendibili "
+                                                            "(Trusted List AgID, archivio di sistema, CA aggiunte)", nome=emittente)))
                 else:
-                    c.append(Controllo("Catena di fiducia", "error", f"non verificata: {msg}"))
+                    c.append(Controllo(n_catena, "error", T("non verificata: {msg}", msg=msg)))
         else:
-            c.append(Controllo("Validazione del certificato", "warn", f"verifica parziale: {msg}"))
-        return c
+            c.append(Controllo(T("Validazione del certificato"), "warn", T("verifica parziale: {msg}", msg=msg)))
+        return c, [], extra, False
     finally:
         try:
             await ctx.aclose()
         except Exception:
             pass
 
-    periodo = f"dal {fmt_data(nb)} al {fmt_data(na)}"
+    periodo = T("dal {inizio} al {fine}", inizio=fmt_data(nb), fine=fmt_data(na))
     if tsa:
-        c.append(Controllo("Validità del certificato", "ok", f"valido al momento della marca ({periodo})"))
+        c.append(Controllo(n_validita, "ok", T("valido al momento della marca ({periodo})", periodo=periodo)))
     elif moment and marca:
-        c.append(Controllo("Validità del certificato", "ok", f"valido alla data della marca temporale, {fmt_dt(moment)} ({periodo})"))
+        c.append(Controllo(n_validita, "ok", T("valido alla data della marca temporale, {data} ({periodo})",
+                                               data=fmt_dt(moment), periodo=periodo)))
     elif moment:
-        c.append(Controllo("Validità del certificato", "warn", f"scaduto il {fmt_data(na)}: valido solo alla data di firma "
-                           "dichiarata dal firmatario, senza marca temporale opponibile"))
+        c.append(Controllo(n_validita, "warn", T("scaduto il {data}: valido solo alla data di firma dichiarata dal firmatario, "
+                                                 "senza marca temporale opponibile", data=fmt_data(na))))
     else:
-        c.append(Controllo("Validità del certificato", "ok", f"in corso di validità ({periodo})"))
-    ancora = archivio_fiducia().ancora_tsl(cert, extra)
-    if ancora is not None:
-        tipo, ritiro = archivio_fiducia().tsl[hashlib.sha256(ancora.dump()).hexdigest()]
-        nome_ca = _get(ancora.subject, 'common_name') or _get(ancora.subject, 'organization_name')
-        quando = moment or momento_firma or ora
-        if quando.tzinfo is None:
-            quando = quando.replace(tzinfo=timezone.utc)
-        c.append(Controllo("Catena di fiducia", "ok", f"verificata fino a «{nome_ca}»"))
-        if ritiro and quando >= ritiro:
-            c.append(Controllo("Trusted List AgID", "warn", f"certificatore «{nome_ca}» ritirato dalla lista il {fmt_data(ritiro)}, prima della firma"))
-        else:
-            c.append(Controllo("Trusted List AgID", "ok", f"certificatore qualificato eIDAS ({tipo})"))
-    else:
-        c.append(Controllo("Catena di fiducia", "ok", "verificata sull'archivio di sistema o sulle CA aggiunte"))
-        c.append(Controllo("Trusted List AgID", "none", "certificatore non presente nella lista"))
+        c.append(Controllo(n_validita, "ok", T("in corso di validità ({periodo})", periodo=periodo)))
+    dopo: List[Controllo] = []
     if not revoca_attiva:
-        c.append(Controllo("Revoca", "none", "controllo OCSP/CRL disattivato nelle impostazioni"))
+        dopo.append(Controllo(n_revoca, "none", T("controllo OCSP/CRL disattivato nelle impostazioni")))
     else:
         try:
             mancate = list(ctx.soft_fail_exceptions)
         except Exception:
             mancate = []
         if mancate:
-            c.append(Controllo("Revoca", "warn", "stato non determinabile: server OCSP/CRL non raggiungibili o senza risposta utile"))
+            dopo.append(Controllo(n_revoca, "warn", T("stato non determinabile: server OCSP/CRL non raggiungibili o senza risposta utile")))
         else:
-            c.append(Controllo("Revoca", "ok", "nessuna revoca risultante da OCSP/CRL"))
-    return c
+            dopo.append(Controllo(n_revoca, "ok", T("nessuna revoca risultante da OCSP/CRL")))
+    return c, dopo, extra, True
 
 
 async def valida_certificato(cert, certs_busta, momento_firma, marca=None, tsa=False) -> List[Controllo]:
@@ -4273,14 +4778,22 @@ async def valida_certificato(cert, certs_busta, momento_firma, marca=None, tsa=F
     else:
         moment = None
     chiave = (hashlib.sha256(cert.dump()).hexdigest(), moment.isoformat() if moment else "", bool(IMP["revoca"]), bool(marca), tsa)
-    with archivio_fiducia().lock_chiave(chiave):     # lock tra thread: ogni verifica ha il suo
-        if chiave in archivio_fiducia().cache_validazione:
-            return list(archivio_fiducia().cache_validazione[chiave])
-        controlli = await _valida_cert_reale(cert, certs_busta, momento_firma, moment, marca, tsa)
-        if len(archivio_fiducia().cache_validazione) > 3000:
-            archivio_fiducia().cache_validazione.clear()
-        archivio_fiducia().cache_validazione[chiave] = list(controlli)
-    return controlli
+    async with ARCHIVIO.lock_chiave(chiave):
+        if chiave in ARCHIVIO.cache_validazione:
+            prima, dopo, extra, valido = ARCHIVIO.cache_validazione[chiave]
+        else:
+            prima, dopo, extra, valido = await _valida_cert_reale(cert, certs_busta, momento_firma, moment, marca, tsa)
+            if len(ARCHIVIO.cache_validazione) > 3000:
+                ARCHIVIO.cache_validazione.clear()
+            ARCHIVIO.cache_validazione[chiave] = (prima, dopo, extra, valido)
+    if not valido:
+        return [Controllo(x.nome, x.stato, x.dettaglio, x.codice) for x in prima]
+    # la Trusted List si valuta alla data piu' affidabile: marca verificata, poi data dichiarata, poi oggi
+    quando = moment or momento_firma or ora
+    if quando.tzinfo is None:
+        quando = quando.replace(tzinfo=timezone.utc)
+    return ([Controllo(x.nome, x.stato, x.dettaglio, x.codice) for x in prima] + controlli_trusted_list(cert, extra, quando, tsa)
+            + [Controllo(x.nome, x.stato, x.dettaglio, x.codice) for x in dopo])
 
 
 def controllo_integrita(fi: FirmaInfo) -> Controllo:
@@ -4302,7 +4815,9 @@ def combina_esito(fi: FirmaInfo):
             fi.stato, fi.esito = s, f"{c.nome}: {c.dettaglio}"
             return
     fi.stato = "ok"
-    fi.esito = "Firma valida: integrità, certificato e catena di fiducia verificati"
+    qualificata = any(c.codice == "qualificazione" and c.stato == "ok" for c in fi.controlli)
+    fi.esito = (T("Firma valida e qualificata eIDAS: integrità, certificato, catena e qualificazione verificati") if qualificata
+                else T("Firma valida: integrità, certificato e catena di fiducia verificati"))
 
 
 # ============================================================ MOTORE: CAdES
@@ -4311,18 +4826,18 @@ async def _analizza_signer(si, certs, payload, livello, tipo="Firma", formato="C
     fi.algo_hash, fi.algo_firma = algoritmi(si)
     st, marca = estrai_tempi(si)
     if st:
-        fi.data_firma, fi.fonte_data = st, "Attributo signing-time della firma"
+        fi.data_firma, fi.fonte_data = st, T("Attributo signing-time della firma")
     fi.marca_temporale = marca
     if marca and not fi.data_firma:
-        fi.data_firma, fi.fonte_data = marca, "Marca temporale (RFC 3161)"
+        fi.data_firma, fi.fonte_data = marca, T("Marca temporale (RFC 3161)")
     cert = trova_cert_signer(si, certs)
     if cert is None:
-        fi.stato, fi.esito = "error", "Certificato del firmatario non presente nella busta"
-        fi.controlli.append(Controllo("Certificato", "error", "non presente nella busta"))
+        fi.stato, fi.esito = "error", T("Certificato del firmatario non presente nella busta")
+        fi.controlli.append(Controllo(T("Certificato"), "error", T("non presente nella busta")))
         return fi
     popola_da_cert(fi, cert)
     if not valida:
-        fi.esito = "Verifica non eseguita (solo estrazione)"
+        fi.esito = T("Verifica non eseguita (solo estrazione)")
         return fi
     fi.integrita, fi.integrita_msg = verifica_integrita(si, cert, payload)
     fi.controlli.append(controllo_integrita(fi))
@@ -4335,7 +4850,7 @@ async def _analizza_signer(si, certs, payload, livello, tipo="Firma", formato="C
     fi.controlli.append(controllo_marca(fi, msg_marca))
     fi.controlli += await valida_certificato(cert, certs, fi.data_firma, fi.marca_temporale if fi.marca_valida else None)
     fi.controlli.append(controllo_algoritmi(fi, cert))
-    fi.controlli.append(controllo_tipo_certificato(cert))
+    fi.controlli.append(controllo_uso_chiave(cert))
     t = controllo_tempi(fi)
     if t is not None:
         fi.controlli.append(t)
@@ -4419,20 +4934,20 @@ def descrivi_modifiche(status) -> Tuple[str, str]:
     dr = getattr(status, 'diff_result', None)
     cov = getattr(getattr(status, 'coverage', None), 'name', None)
     if dr is not None and type(dr).__name__ == 'SuspiciousModification':
-        return "error", "Il documento risulta MODIFICATO dopo la firma"
+        return "error", T("Il documento risulta MODIFICATO dopo la firma")
     lvl = getattr(getattr(status, 'modification_level', None), 'name', None)
     if cov == 'ENTIRE_FILE':
-        return "ok", "La firma copre l'intero file: documento non modificato dopo la firma"
+        return "ok", T("La firma copre l'intero file: documento non modificato dopo la firma")
     if cov == 'ENTIRE_REVISION':
         if lvl in (None, 'NONE'):
-            return "ok", "Documento non modificato dopo la firma"
+            return "ok", T("Documento non modificato dopo la firma")
         if lvl in ('LTA_UPDATES', 'FORM_FILLING', 'ANNOTATIONS'):
-            etichette = {'LTA_UPDATES': "aggiornamenti di validazione a lungo termine",
-                         'FORM_FILLING': "compilazione di moduli", 'ANNOTATIONS': "annotazioni"}
-            return "warn", f"Dopo la firma sono state aggiunte modifiche consentite ({etichette[lvl]})"
-        return "error", "Il documento risulta MODIFICATO dopo la firma"
+            etichette = {'LTA_UPDATES': T("aggiornamenti di validazione a lungo termine"),
+                         'FORM_FILLING': T("compilazione di moduli"), 'ANNOTATIONS': T("annotazioni")}
+            return "warn", T("Dopo la firma sono state aggiunte modifiche consentite ({tipo})", tipo=etichette[lvl])
+        return "error", T("Il documento risulta MODIFICATO dopo la firma")
     if cov:
-        return "warn", f"La firma non copre l'intero file (copertura: {cov.lower().replace('_', ' ')})"
+        return "warn", T("La firma non copre l'intero file (copertura: {copertura})", copertura=cov.lower().replace('_', ' '))
     return "", ""
 
 
@@ -4458,20 +4973,20 @@ async def _firma_pdf(sig, valida=True) -> FirmaInfo:
     m = parse_pdf_date(_pdf_val(obj, '/M'))
     fi.data_pdf_m, fi.marca_temporale = m, marca
     if is_ts and marca:
-        fi.data_firma, fi.fonte_data = marca, "Marca temporale (RFC 3161)"
+        fi.data_firma, fi.fonte_data = marca, T("Marca temporale (RFC 3161)")
     elif attr:
-        fi.data_firma, fi.fonte_data = attr, "Attributo signing-time della firma"
+        fi.data_firma, fi.fonte_data = attr, T("Attributo signing-time della firma")
     elif m:
-        fi.data_firma, fi.fonte_data = m, "Data /M del dizionario di firma PDF"
+        fi.data_firma, fi.fonte_data = m, T("Data /M del dizionario di firma PDF")
     elif marca:
-        fi.data_firma, fi.fonte_data = marca, "Marca temporale (RFC 3161)"
+        fi.data_firma, fi.fonte_data = marca, T("Marca temporale (RFC 3161)")
     if attr and m and abs((attr - m).total_seconds()) > 300:
-        fi.note.append("La data /M del PDF differisce dall'attributo signing-time di oltre 5 minuti")
+        fi.note.append(T("La data /M del PDF differisce dall'attributo signing-time di oltre 5 minuti"))
     cert = trova_cert_signer(si, certs)
     if cert is not None:
         popola_da_cert(fi, cert)
     if not valida:
-        fi.esito = "Verifica non eseguita (solo estrazione)"
+        fi.esito = T("Verifica non eseguita (solo estrazione)")
         return fi
 
     # integrita' (digest + firma + analisi modifiche) tramite pyHanko; la fiducia si valuta a parte
@@ -4487,25 +5002,25 @@ async def _firma_pdf(sig, valida=True) -> FirmaInfo:
             status = None
         if status is not None:
             fi.integrita = bool(status.intact and status.valid)
-            fi.integrita_msg = ("impronta e firma crittografica verificate" if fi.integrita
-                                else "impronta o firma crittografica non valide: documento alterato o firma corrotta")
+            fi.integrita_msg = (T("impronta e firma crittografica verificate") if fi.integrita
+                                else T("impronta o firma crittografica non valide: documento alterato o firma corrotta"))
             fi.mod_livello, fi.modifiche = descrivi_modifiche(status)
         else:
-            fi.integrita_msg = "motore di verifica PDF non disponibile"
+            fi.integrita_msg = T("motore di verifica PDF non disponibile")
     except Exception as e:
-        fi.integrita, fi.integrita_msg = None, f"verifica non eseguibile ({type(e).__name__})"
+        fi.integrita, fi.integrita_msg = None, T("verifica non eseguibile ({errore})", errore=type(e).__name__)
     fi.controlli.append(controllo_integrita(fi))
-    if fi.modifiche:
-        fi.controlli.append(Controllo("Modifiche dopo la firma", fi.mod_livello or "none", fi.modifiche))
+    if fi.modifiche and fi.integrita is not False:        # se l'impronta non torna, l'analisi delle revisioni non conta
+        fi.controlli.append(Controllo(T("Modifiche dopo la firma"), fi.mod_livello or "none", fi.modifiche))
 
     if cert is None:
-        fi.controlli.append(Controllo("Certificato", "error", "non presente nella firma"))
+        fi.controlli.append(Controllo(T("Certificato"), "error", T("non presente nella firma")))
         combina_esito(fi)
         return fi
     msg_marca = ""
     if is_ts:
         fi.marca_valida = fi.integrita
-        msg_marca = f"marca del documento: {fi.integrita_msg}"
+        msg_marca = T("marca del documento: {esito}", esito=fi.integrita_msg)
     else:
         fi.controlli.append(verifica_legame_certificato(si, cert))
         token = token_marca(si)
@@ -4519,7 +5034,7 @@ async def _firma_pdf(sig, valida=True) -> FirmaInfo:
         fi.controlli += await valida_certificato(cert, certs, fi.data_firma, fi.marca_temporale if fi.marca_valida else None)
     fi.controlli.append(controllo_algoritmi(fi, cert))
     if not is_ts:
-        fi.controlli.append(controllo_tipo_certificato(cert))
+        fi.controlli.append(controllo_uso_chiave(cert))
         t = controllo_tempi(fi)
         if t is not None:
             fi.controlli.append(t)
@@ -4665,16 +5180,16 @@ def _verifica_riferimento(rif, sig_indice: int, dati: bytes) -> Tuple[Optional[b
     firma = list(radice.iter())[sig_indice]
     uri = rif.get("URI")
     if uri is None or (uri and not uri.startswith("#")):
-        return None, f"riferimento esterno non verificabile ({uri})", False
+        return None, T("riferimento esterno non verificabile ({uri})", uri=uri), False
     if uri in ("", "#xpointer(/)"):
         nodo, copre = albero, True
     else:
         ident = re.sub(r"^#xpointer\(id\('(.*)'\)\)$", r"\1", uri).lstrip("#")
         ids, doppi = _mappa_id(radice)
         if ident in doppi:
-            return False, f"Id «{ident}» duplicato nel documento: possibile manomissione", False
+            return False, T("Id «{id}» duplicato nel documento: possibile manomissione", id=ident), False
         if ident not in ids:
-            return False, f"elemento «{ident}» firmato non trovato", False
+            return False, T("elemento «{id}» firmato non trovato", id=ident), False
         nodo, copre = ids[ident], ids[ident] is radice
     c14n_alg = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
     trasf = rif.find(_DS + "Transforms")
@@ -4689,34 +5204,34 @@ def _verifica_riferimento(rif, sig_indice: int, dati: bytes) -> Tuple[Optional[b
         elif alg.endswith("REC-xpath-19991116") or alg.endswith("xmldsig-filter2"):
             testo = " ".join((x.text or "") for x in t if isinstance(x.tag, str))
             if "Signature" not in testo or not ("not(" in testo or any(x.get("Filter") == "subtract" for x in t if isinstance(x.tag, str))):
-                return None, f"trasformazione XPath non supportata ({testo.strip()[:60]})", False
+                return None, T("trasformazione XPath non supportata ({testo})", testo=testo.strip()[:60]), False
             for s in list(radice.iter(_DS + "Signature")):
                 _togli_nodo(s)
         else:
-            return None, f"trasformazione non supportata ({alg})", False
+            return None, T("trasformazione non supportata ({alg})", alg=alg), False
     dm, dv = rif.find(_DS + "DigestMethod"), rif.find(_DS + "DigestValue")
     algo = _alg_hash_xml(dm.get("Algorithm", "")) if dm is not None else None
     if algo is None or dv is None:
-        return None, "algoritmo di impronta non supportato", False
+        return None, T("algoritmo di impronta non supportato"), False
     calcolata = hashlib.new(algo, _c14n(nodo, c14n_alg)).digest()
     if calcolata != base64.b64decode("".join((dv.text or "").split())):
-        return False, f"l'impronta del riferimento «{uri or 'documento'}» non corrisponde: documento alterato", copre
+        return False, T("l'impronta del riferimento «{uri}» non corrisponde: documento alterato", uri=uri or T("documento")), copre
     return True, "", copre
 
 
 def verifica_xmldsig(firma, radice, dati: bytes, cert) -> Tuple[Optional[bool], str, Optional[bool]]:
     """Verifica un ds:Signature: riferimenti + SignedInfo. -> (esito, messaggio, firma copre l'intero documento)"""
     if etree is None or not HAS_CRYPTO:
-        return None, "librerie lxml/cryptography non disponibili", None
+        return None, T("librerie lxml/cryptography non disponibili"), None
     try:
         si = firma.find(_DS + "SignedInfo")
         sv = firma.find(_DS + "SignatureValue")
         if si is None or sv is None:
-            return False, "struttura ds:Signature incompleta", None
+            return False, T("struttura ds:Signature incompleta"), None
         indice = list(radice.iter()).index(firma)
         rifs = si.findall(_DS + "Reference")
         if not rifs:
-            return False, "nessun riferimento firmato", None
+            return False, T("nessun riferimento firmato"), None
         copre = False
         for r in rifs:
             esito, msg, c = _verifica_riferimento(r, indice, dati)
@@ -4730,7 +5245,7 @@ def verifica_xmldsig(firma, radice, dati: bytes, cert) -> Tuple[Optional[bool], 
         chiave = serialization.load_der_public_key(cert['tbs_certificate']['subject_public_key_info'].dump())
         nome_h = next((n for n in ("sha3-256", "sha3-384", "sha3-512", "sha224", "sha256", "sha384", "sha512", "sha1") if n in alg_uri.lower()), None)
         if nome_h is None:
-            return None, f"algoritmo di firma non supportato ({alg_uri})", copre
+            return None, T("algoritmo di firma non supportato ({alg})", alg=alg_uri), copre
         h = _HASH_CLASSI[nome_h.replace("-", "_")]()
         if "MGF1" in alg_uri or "rsa-pss" in alg_uri.lower():
             chiave.verify(valore, canonico, padding.PSS(mgf=padding.MGF1(h), salt_length=h.digest_size), h)
@@ -4741,12 +5256,12 @@ def verifica_xmldsig(firma, radice, dati: bytes, cert) -> Tuple[Optional[bool], 
         elif "rsa" in alg_uri.lower():
             chiave.verify(valore, canonico, padding.PKCS1v15(), h)
         else:
-            return None, f"algoritmo di firma non supportato ({alg_uri})", copre
-        return True, "riferimenti e firma crittografica verificati: documento integro", copre
+            return None, T("algoritmo di firma non supportato ({alg})", alg=alg_uri), copre
+        return True, T("riferimenti e firma crittografica verificati: documento integro"), copre
     except InvalidSignature:
-        return False, "firma crittografica non valida: documento alterato o firma corrotta", None
+        return False, T("firma crittografica non valida: documento alterato o firma corrotta"), None
     except Exception as e:
-        return None, f"verifica non eseguibile ({type(e).__name__}: {e})", None
+        return None, T("verifica non eseguibile ({errore})", errore=f"{type(e).__name__}: {e}"), None
 
 
 def _certificato_xades(firma, certs) -> Tuple[Optional[x509.Certificate], Optional[Controllo]]:
@@ -4834,7 +5349,7 @@ async def analizza_xml(ris: RisultatoDoc, dati: bytes, valida: bool = True):
         fi.controlli.append(controllo_marca(fi, msg_marca))
         fi.controlli += await valida_certificato(cert, certs, fi.data_firma, fi.marca_temporale if fi.marca_valida else None)
         fi.controlli.append(controllo_algoritmi(fi, cert))
-        fi.controlli.append(controllo_tipo_certificato(cert))
+        fi.controlli.append(controllo_uso_chiave(cert))
         t = controllo_tempi(fi)
         if t is not None:
             fi.controlli.append(t)
@@ -4842,117 +5357,143 @@ async def analizza_xml(ris: RisultatoDoc, dati: bytes, valida: bool = True):
         ris.firme.append(fi)
 
 def report_testuale(r: RisultatoDoc) -> str:
-    L = [f"File: {r.nome}", f"Percorso: {r.percorso}", f"Formato: {r.formato}",
-         f"Dimensione: {fmt_size(r.dimensione)}", f"SHA-256: {r.sha256}",
-         f"Esito complessivo: {etichetta_doc(r)} - {r.esito}", f"Firme rilevate: {len(r.firme)}"]
+    L = [f"{T('File')}: {r.nome}", f"{T('Percorso')}: {r.percorso}", f"{T('Formato')}: {r.formato}",
+         f"{T('Dimensione')}: {fmt_size(r.dimensione)}", f"SHA-256: {r.sha256}",
+         f"{T('Esito complessivo')}: {etichetta_doc(r)} - {r.esito}", f"{T('Firme rilevate')}: {len(r.firme)}"]
     if r.nome_contenuto and r.formato == 'CAdES':
-        L.append(f"Documento contenuto: {r.nome_contenuto} ({r.tipo_contenuto})")
-    L += [f"Nota: {n}" for n in r.note]
+        L.append(f"{T('Documento contenuto')}: {r.nome_contenuto} ({T(r.tipo_contenuto)})")
+    if r.estr_esito:
+        L.append(f"{T('Estrazione')}: {ETICHETTA_ESTRAZIONE[r.estr_esito]} - {r.estr_dettaglio}")
+    L += [f"{T('Nota')}: {n}" for n in r.note]
     for i, f in enumerate(r.firme, 1):
-        L += ["", f"--- {f.tipo} {i} ---", f"Firmatario: {f.firmatario}"]
+        L += ["", f"--- {T(f.tipo)} {i} ---", f"{T('Firmatario')}: {f.firmatario}"]
         if f.identificativo:
-            L.append(f"Identificativo: {f.identificativo}")
+            L.append(f"{T('Identificativo')}: {f.identificativo}")
         if f.organizzazione:
-            L.append(f"Organizzazione: {f.organizzazione}")
-        L.append(f"Data e ora firma: {fmt_dt(f.data_firma)}" + (f"  [{f.fonte_data}]" if f.fonte_data else ""))
+            L.append(f"{T('Organizzazione')}: {f.organizzazione}")
+        L.append(f"{T('Data e ora firma')}: {fmt_dt(f.data_firma)}" + (f"  [{f.fonte_data}]" if f.fonte_data else ""))
         if f.data_pdf_m:
-            L.append(f"Data /M del PDF: {fmt_dt(f.data_pdf_m)}")
+            L.append(f"{T('Data /M del PDF')}: {fmt_dt(f.data_pdf_m)}")
         if f.marca_temporale:
-            L.append(f"Marca temporale: {fmt_dt(f.marca_temporale)}")
-        L += [f"Emittente: {f.emittente}", f"Certificato valido dal {fmt_data(f.valido_dal)} al {fmt_data(f.valido_al)}",
-              f"Esito: {etichetta_firma(f)} - {f.esito}", "Controlli:"]
+            L.append(f"{T('Marca temporale')}: {fmt_dt(f.marca_temporale)}")
+        L += [f"{T('Emittente')}: {f.emittente}",
+              T("Certificato valido dal {inizio} al {fine}", inizio=fmt_data(f.valido_dal), fine=fmt_data(f.valido_al)),
+              f"{T('Esito')}: {etichetta_firma(f)} - {f.esito}", f"{T('Controlli')}:"]
         simboli = {"ok": "[OK]", "warn": "[!!]", "error": "[KO]", "none": "[--]"}
         L += [f"  {simboli[c.stato]} {c.nome}: {c.dettaglio}" for c in f.controlli]
-        L += [f"Nota: {n}" for n in f.note]
-    L += ["", f"Verifica eseguita il {fmt_dt(datetime.now().astimezone())} con {NOME_APP} ({MOTORE_FIRME})"]
+        L += [f"{T('Nota')}: {n}" for n in f.note]
+    L += ["", T("Verifica eseguita il {data} con {app}", data=fmt_dt(datetime.now().astimezone()), app=f"{NOME_APP} ({MOTORE_FIRME})"),
+          f"{ARCHIVIO.tsl_descrizione}"]
     return "\n".join(L)
 
 
 def esporta_csv(risultati: List[RisultatoDoc], path: str):
     with open(path, 'w', newline='', encoding='utf-8-sig') as f:
         w = csv.writer(f, delimiter=';')
-        w.writerow(["File", "Percorso", "Formato", "Dimensione", "SHA-256", "Stato documento", "Esito documento",
-                    "N. firme", "Tipo", "Firmatario", "Identificativo", "Organizzazione", "Data firma",
-                    "Ora firma", "Fonte data", "Marca temporale", "Marca valida", "Cert. valido dal", "Cert. valido al",
-                    "Emittente", "Integrita'", "Esito firma", "Controlli"])
+        w.writerow([T(x) for x in ("File", "Percorso", "Formato", "Dimensione", "SHA-256", "Stato documento", "Esito documento",
+                                   "Estrazione", "Documento estratto", "N. firme", "Tipo", "Firmatario", "Identificativo",
+                                   "Organizzazione", "Data firma", "Ora firma", "Fonte data", "Marca temporale", "Marca valida",
+                                   "Cert. valido dal", "Cert. valido al", "Emittente", "Integrità", "Qualificazione eIDAS",
+                                   "Esito firma", "Controlli")])
         for r in risultati:
-            base = [r.nome, r.percorso, r.formato, r.dimensione, r.sha256, etichetta_doc(r), r.esito, len(r.firme)]
+            base = [r.nome, r.percorso, r.formato, r.dimensione, r.sha256, etichetta_doc(r), r.esito,
+                    ETICHETTA_ESTRAZIONE[r.estr_esito] if r.estr_esito else "", r.estr_dettaglio, len(r.firme)]
             if not r.firme:
-                w.writerow(base + [""] * 15)
+                w.writerow(base + [""] * 16)
             for fi in r.firme:
-                w.writerow(base + [fi.tipo, fi.firmatario, fi.identificativo, fi.organizzazione, fmt_data(fi.data_firma),
+                qualif = next((c.dettaglio for c in fi.controlli if c.codice == "qualificazione"), "")
+                w.writerow(base + [T(fi.tipo), fi.firmatario, fi.identificativo, fi.organizzazione, fmt_data(fi.data_firma),
                                    fmt_ora(fi.data_firma) if fi.data_firma else "", fi.fonte_data,
                                    fmt_dt(fi.marca_temporale) if fi.marca_temporale else "",
-                                   {True: "si", False: "no", None: ""}[fi.marca_valida],
+                                   {True: T("sì"), False: T("no"), None: ""}[fi.marca_valida],
                                    fmt_data(fi.valido_dal), fmt_data(fi.valido_al), fi.emittente,
-                                   {True: "verificata", False: "NON valida", None: "non verificabile"}[fi.integrita],
-                                   f"{etichetta_firma(fi)} - {fi.esito}",
+                                   {True: T("verificata"), False: T("NON valida"), None: T("non verificabile")}[fi.integrita],
+                                   qualif, f"{etichetta_firma(fi)} - {fi.esito}",
                                    " | ".join(f"{c.nome}: {c.dettaglio}" for c in fi.controlli)])
 
 
 def esporta_html(risultati: List[RisultatoDoc], path: str):
-    colori = {"ok": "#22A06B", "warn": "#E8A317", "error": "#E5484D", "none": "#8A94A6"}
+    colori = {"ok": "#11714D", "warn": "#E8A317", "error": "#B92C49", "none": "#5F6376"}
+    testo_badge = {"ok": "#fff", "warn": "#101828", "error": "#fff", "none": "#fff"}     # contrasto >= 4.5:1
+    colori_testo = {"ok": "#11714D", "warn": "#8A5800", "error": "#B92C49", "none": "#5F6376"}
     e = html.escape
     tot = {k: sum(1 for r in risultati if r.stato == k) for k in colori}
     righe = []
     for r in risultati:
-        righe.append(f"<tr class='doc'><td><span class='b' style='background:{colori[r.stato]}'>{e(etichetta_doc(r))}</span></td>"
-                     f"<td><b>{e(r.nome)}</b><br><small>{e(r.formato)} · {e(fmt_size(r.dimensione))}<br>SHA-256 {e(r.sha256[:32])}…</small></td>"
+        estr = (f"<br><small>{e(T('Estrazione'))}: {e(ETICHETTA_ESTRAZIONE[r.estr_esito])} · {e(r.estr_dettaglio)}</small>"
+                if r.estr_esito else "")
+        righe.append(f"<tr class='doc'><td><span class='b' style='background:{colori[r.stato]};color:{testo_badge[r.stato]}'>"
+                     f"{e(etichetta_doc(r))}</span></td>"
+                     f"<th scope='row'><b>{e(r.nome)}</b><br><small>{e(r.formato)} · {e(fmt_size(r.dimensione))}<br>SHA-256 {e(r.sha256[:32])}…</small>{estr}</th>"
                      f"<td colspan='3'>{e(r.esito)}</td></tr>")
         for fi in r.firme:
-            controlli = "".join(f"<li style='color:{colori[c.stato]}'><span style='color:#344054'>{e(c.nome)}: {e(c.dettaglio)}</span></li>" for c in fi.controlli)
-            righe.append(f"<tr><td></td><td>↳ {e(fi.tipo)}: <b>{e(fi.firmatario)}</b><br><small>{e(fi.identificativo)}</small></td>"
+            simbolo = {"ok": "✓", "warn": "!", "error": "✕", "none": "–"}
+            controlli = "".join(f"<li><span aria-hidden='true' style='color:{colori_testo[c.stato]};font-weight:700'>{simbolo[c.stato]}</span> "
+                                f"<span class='sr'>{e(STATO_CONTROLLO[c.stato])}: </span>{e(c.nome)}: {e(c.dettaglio)}</li>" for c in fi.controlli)
+            righe.append(f"<tr><td></td><td>↳ {e(T(fi.tipo))}: <b>{e(fi.firmatario)}</b><br><small>{e(fi.identificativo)}</small></td>"
                          f"<td>{e(fmt_dt(fi.data_firma))}<br><small>{e(fi.fonte_data)}</small></td>"
-                         f"<td>{e(fi.emittente)}<br><small>valido {e(fmt_data(fi.valido_dal))} → {e(fmt_data(fi.valido_al))}</small></td>"
-                         f"<td><span class='b' style='background:{colori[fi.stato]}'>{e(etichetta_firma(fi))}</span> {e(fi.esito)}<ul>{controlli}</ul></td></tr>")
+                         f"<td>{e(fi.emittente)}<br><small>{e(T('valido'))} {e(fmt_data(fi.valido_dal))} → {e(fmt_data(fi.valido_al))}</small></td>"
+                         f"<td><span class='b' style='background:{colori[fi.stato]};color:{testo_badge[fi.stato]}'>{e(etichetta_firma(fi))}</span> "
+                         f"{e(fi.esito)}<ul>{controlli}</ul></td></tr>")
     ora = fmt_dt(datetime.now().astimezone())
-    doc = f"""<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Report verifica firme</title>
+    titolo = T("Report di verifica firme")
+    doc = f"""<!doctype html><html lang="{LINGUA}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{e(titolo)}</title>
 <style>body{{font:14px {FONT_HTML};margin:32px;color:#101828;background:#f2f4f8}}
 h1{{color:#4C57CC;margin:0 0 4px}}table{{border-collapse:collapse;width:100%;background:#fff;border-radius:10px;overflow:hidden}}
 td,th{{padding:8px 10px;border-right:1px solid #e3e7ee;vertical-align:top;text-align:left}}th{{background:#13141B;color:#fff}}
 tr.doc td{{background:#f6f8fb}}.b{{color:#fff;border-radius:8px;padding:2px 8px;font-size:12px;font-weight:600}}
-small{{color:#667085}}ul{{margin:6px 0 0;padding-left:18px;font-size:12px}}.k{{display:inline-block;margin-right:18px;font-weight:600}}</style></head><body>
-<h1>Report di verifica firme</h1><p>Generato il {e(ora)} con {NOME_APP} ({MOTORE_FIRME})</p>
-<p><span class='k'>Totale: {len(risultati)}</span><span class='k' style='color:#22A06B'>Verificati: {tot['ok']}</span>
-<span class='k' style='color:#E8A317'>Attenzione: {tot['warn'] + tot['none']}</span><span class='k' style='color:#E5484D'>Non validi: {tot['error']}</span></p>
-<table><tr><th>Stato</th><th>Documento / firmatario</th><th>Data e ora firma</th><th>Emittente</th><th>Esito e controlli</th></tr>
-{''.join(righe)}</table></body></html>"""
+small{{color:#596173}}ul{{margin:6px 0 0;padding-left:18px;font-size:12px;list-style:none}}.k{{display:inline-block;margin-right:18px;font-weight:600}}
+th[scope=row]{{font-weight:400;background:#f6f8fb}}caption{{text-align:left;padding:0 0 8px;color:#596173}}
+.sr{{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}}</style></head><body><main>
+<h1>{e(titolo)}</h1><p>{e(T("Generato il {data} con {app}", data=ora, app=f"{NOME_APP} ({MOTORE_FIRME})"))} · {e(ARCHIVIO.tsl_descrizione)}</p>
+<p><span class='k'>{e(T("Totale"))}: {len(risultati)}</span><span class='k' style='color:{colori_testo["ok"]}'>{e(T("Verificati"))}: {tot['ok']}</span>
+<span class='k' style='color:{colori_testo["warn"]}'>{e(T("Attenzione"))}: {tot['warn'] + tot['none']}</span><span class='k' style='color:{colori_testo["error"]}'>{e(T("Non validi"))}: {tot['error']}</span></p>
+<table><caption>{e(titolo)}</caption><thead><tr><th scope='col'>{e(T("Stato"))}</th><th scope='col'>{e(T("Documento / firmatario"))}</th>
+<th scope='col'>{e(T("Data e ora firma"))}</th><th scope='col'>{e(T("Emittente"))}</th><th scope='col'>{e(T("Esito e controlli"))}</th></tr></thead>
+<tbody>{''.join(righe)}</tbody></table></main></body></html>"""
     with open(path, 'w', encoding='utf-8') as f:
         f.write(doc)
 
 def descrivi_certificato(der: bytes) -> str:
     c = x509.Certificate.load(der)
-    L = ["SOGGETTO", "  " + c.subject.human_friendly.replace("; ", "\n  "), "",
-         "EMITTENTE", "  " + c.issuer.human_friendly.replace("; ", "\n  "), "",
-         f"Numero di serie : {format(c.serial_number, 'X')}"]
+    def riga(chiave, valore):
+        L.append(f"{T(chiave):<16}: {valore}")
+
+    L = [T("SOGGETTO"), "  " + c.subject.human_friendly.replace("; ", "\n  "), "",
+         T("EMITTENTE"), "  " + c.issuer.human_friendly.replace("; ", "\n  "), ""]
+    riga("Numero di serie", format(c.serial_number, 'X'))
     try:
         v = c['tbs_certificate']['validity']
-        L.append(f"Valido dal      : {fmt_dt(v['not_before'].native)}")
-        L.append(f"Valido fino al  : {fmt_dt(v['not_after'].native)}")
+        riga("Valido dal", fmt_dt(v['not_before'].native))
+        riga("Valido fino al", fmt_dt(v['not_after'].native))
     except Exception:
         pass
     try:
-        L.append(f"Chiave pubblica : {c.public_key.algorithm.upper()} {c.public_key.bit_size} bit")
-        L.append(f"Algoritmo firma : {c.signature_algo} / {c.hash_algo}")
+        riga("Chiave pubblica", f"{c.public_key.algorithm.upper()} {c.public_key.bit_size} bit")
+        riga("Algoritmo firma", f"{c.signature_algo} / {c.hash_algo}")
     except Exception:
         pass
     try:
-        L.append(f"CA              : {'si' if c.ca else 'no'}")
+        riga("CA", T("sì") if c.ca else T("no"))
     except Exception:
         pass
-    for etichetta, attr in (("Uso chiave      ", 'key_usage_value'), ("Uso esteso      ", 'extended_key_usage_value')):
+    for chiave, attr in (("Uso chiave", 'key_usage_value'), ("Uso esteso", 'extended_key_usage_value')):
         try:
             val = getattr(c, attr)
             if val is not None:
-                L.append(f"{etichetta}: {', '.join(sorted(str(x) for x in val.native))}")
+                riga(chiave, ', '.join(sorted(str(x) for x in val.native)))
         except Exception:
             pass
     try:
         pol = [str(p['policy_identifier']) for p in c.certificate_policies_value.native]
         if pol:
-            L.append("Policy          : " + ", ".join(pol))
+            riga("Policy", ", ".join(pol))
     except Exception:
         pass
+    qc = info_qc(c)
+    if qc["qc"] or qc["qscd"] or qc["tipi"]:
+        tipi = {"esign": T("firma"), "eseal": T("sigillo"), "web": T("siti web")}
+        riga("QcStatements", ", ".join([T("qualificato")] * qc["qc"] + ["QSCD"] * qc["qscd"] + [tipi[t] for t in sorted(qc["tipi"])]))
     try:
         if c.ocsp_urls:
             L.append("OCSP            : " + ", ".join(c.ocsp_urls))
@@ -4965,7 +5506,7 @@ def descrivi_certificato(der: bytes) -> str:
         pass
     sha1, sha256 = hashlib.sha1(der).hexdigest().upper(), hashlib.sha256(der).hexdigest().upper()
     fp = lambda h: ":".join(h[i:i + 2] for i in range(0, len(h), 2))
-    L += ["", "IMPRONTE", f"  SHA-1   : {fp(sha1)}", f"  SHA-256 : {fp(sha256)}"]
+    L += ["", T("IMPRONTE"), f"  SHA-1   : {fp(sha1)}", f"  SHA-256 : {fp(sha256)}"]
     return "\n".join(L)
 
 
@@ -5117,8 +5658,11 @@ def righe_verifica(ris):
     return righe
 
 def nota_verifica():
+    a = archivio_fiducia()
+    autenticita = a.tsl_dettaglio.split("\n")[0] if a.tsl_dettaglio else ""
     return (f"Verifica eseguita il {fmt_dt(datetime.now().astimezone())} con il {MOTORE_FIRME} - "
-            f"radici attendibili: archivio certificati di sistema + CA aggiunte nel P7MReader; "
+            f"{a.tsl_descrizione}" + (f" ({autenticita})" if autenticita else "") +
+            f"; radici attendibili: Trusted List AgID + archivio certificati di sistema + CA aggiunte nel P7MReader; "
             f"revoca OCSP/CRL: {'attiva (soft-fail)' if IMP['revoca'] else 'disattivata'}.")
 
 class VerificaFirme:
@@ -8724,7 +9268,7 @@ if __name__ == '__main__':
     # Archivio di fiducia (con il download della Trusted List AgID) preparato in sottofondo:
     # la prima verifica non deve aspettare la rete
     if P7M_LIBRERIE_OK:
-        threading.Thread(target=archivio_fiducia, daemon=True).start()
+        threading.Thread(target=prepara_archivio_fiducia, daemon=True).start()
 
     # Apertura da parametri: cartelle export, .tgz / .tar.gz / .tar, .eml
     # Esempio: ZimbraViewer.exe "C:\Mail\export" takeout.zip outlook.pst mail.msg documento.p7m

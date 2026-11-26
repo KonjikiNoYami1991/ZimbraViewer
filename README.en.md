@@ -58,7 +58,7 @@ Time zones, all-day events, recurrences (in plain words), attendees with their r
 ### Digital signatures (built-in P7MReader)
 - **CAdES** (`.p7m`, nested or base64; detached `.p7s`), **PAdES** (signed PDFs, detects changes after signing), **XAdES** (`.xml`, cryptographic check), **FatturaPA** summary.
 - Counter-signatures and RFC 3161 **timestamps** verified; expired certificates validated at signing time.
-- Trust chain against the **AgID Trusted List** (refreshed at every start, with offline copy) + system certificate store (Windows, macOS keychain, Linux distribution CAs); OCSP/CRL revocation in soft-fail mode.
+- Trust chain against the **AgID Trusted List** (refreshed at every start, with offline copy; accepted only if its XAdES signature is intact and its signer is the one listed in the **EU Commission's LOTL**), certifier status **at signing time** (ServiceHistory), **eIDAS qualification** (QES, AdES/QC, QSCD) and qualified timestamps, key-usage check + system certificate store (Windows, macOS keychain, Linux distribution CAs); OCSP/CRL revocation in soft-fail mode.
 - Clear outcomes: **Verified / Warning / Invalid**, with the list of checks for every signature; CSV/HTML reports.
 
 ### Export

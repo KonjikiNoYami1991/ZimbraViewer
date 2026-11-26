@@ -56,7 +56,7 @@ Eventi con fuso orario, giorni interi, ricorrenze (in chiaro: «ogni settimana �
 ### Firme digitali (P7MReader integrato)
 - **CAdES** (`.p7m`, anche annidati o in base64; `.p7s` detached), **PAdES** (PDF firmati, con rilevamento modifiche dopo la firma), **XAdES** (`.xml`, verifica crittografica), riepilogo **FatturaPA**.
 - Controfirme e **marche temporali** RFC 3161 verificate; validazione alla data di firma per i certificati scaduti.
-- Catena di fiducia verso la **Trusted List AgID** (aggiornata a ogni avvio, con copia offline) + archivio certificati di sistema (Windows, portachiavi macOS, CA della distribuzione Linux); revoca OCSP/CRL in soft-fail.
+- Catena di fiducia verso la **Trusted List AgID** (aggiornata a ogni avvio, con copia offline; accettata solo se la sua firma XAdES è integra e il firmatario è quello indicato dalla **LOTL della Commissione UE**), stato del certificatore **alla data della firma** (storico ServiceHistory), **qualificazione eIDAS** (QES, AdES/QC, QSCD) e marche temporali qualificate, controllo dell'uso della chiave + archivio certificati di sistema (Windows, portachiavi macOS, CA della distribuzione Linux); revoca OCSP/CRL in soft-fail.
 - Esiti chiari: **Verificato / Attenzione / Non valido**, con l'elenco dei controlli per ogni firma; report CSV/HTML.
 
 ### Esportazione

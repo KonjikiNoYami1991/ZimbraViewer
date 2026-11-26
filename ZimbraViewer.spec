@@ -8,7 +8,7 @@ import glob
 import os
 import sys
 
-VERSIONE = "3.2.1"
+VERSIONE = "3.2.2"
 SCRIPT = sorted(glob.glob("ZimbraViewer *.py"))[-1]
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
