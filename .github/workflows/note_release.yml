@@ -1,0 +1,27 @@
+name: Note della release
+
+# Aggiorna le note di una release già pubblicata con il testo di docs/release/<tag>.md
+# (Actions -> Note della release -> Run workflow, scrivendo il tag, es. v3.2.2)
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag della release (es. v3.2.2)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  note:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Aggiorna le note
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          test -f "docs/release/$TAG.md" || { echo "::error::manca docs/release/$TAG.md"; exit 1; }
+          gh release edit "$TAG" --notes-file "docs/release/$TAG.md"
+          echo "Note di $TAG aggiornate"

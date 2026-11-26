@@ -96,6 +96,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Note della release (docs/release/<tag>.md, se c'è)
+        env:
+          TAG: ${{ inputs.release || github.ref_name }}
+        run: |
+          if [ -f "docs/release/$TAG.md" ]; then cp "docs/release/$TAG.md" note.md; else : > note.md; fi
       - uses: actions/download-artifact@v4
         with:
           path: pacchetti
@@ -106,4 +112,5 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: ZimbraViewer ${{ inputs.release || github.ref_name }}
           files: pacchetti/*
+          body_path: note.md
           generate_release_notes: true
