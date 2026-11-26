@@ -9,7 +9,7 @@
 # ZimbraViewer
 
 **Lettore locale di archivi di posta con verifica delle firme digitali.**
-Apre l'export della posta di Zimbra, Gmail, Outlook, Thunderbird, Apple Mail (o qualsiasi mbox, Maildir, `.eml`), lo indicizza in un database locale e permette di **cercare, leggere, stampare in PDF ed esportare** le mail con i loro allegati — **senza server, senza client di posta e senza internet**: i file restano sul tuo computer.
+Apre l'export di Zimbra, Carbonio, Gmail, Outlook, Thunderbird, Apple/iCloud (o qualsiasi mbox, Maildir, `.eml`, `.ics`, `.vcf`), lo indicizza in un database locale e permette di **cercare, leggere, stampare in PDF ed esportare** mail e allegati, ma anche **calendario, attività, contatti, chat, note e file** — **senza server, senza client di posta e senza internet**: i file restano sul tuo computer.
 
 Integra un verificatore di **firme digitali** (CAdES `.p7m`, PAdES, XAdES, FatturaPA) con catena di fiducia verso la **Trusted List AgID (eIDAS)**, e mostra le **PEC** come in una casella certificata.
 
@@ -22,7 +22,7 @@ Integra un verificatore di **firme digitali** (CAdES `.p7m`, PAdES, XAdES, Fattu
 - **Sorgenti supportate**
   | Sorgente | Formato |
   |---|---|
-  | Zimbra | `.tgz` / `.tar.gz` / `.tar` o cartella estratta |
+  | Zimbra, Carbonio | `.tgz` / `.tar.gz` / `.tar` (REST `fmt=tgz`) o cartella estratta |
   | Gmail (Google Takeout) | `.mbox` o `.zip` — cartelle ricostruite dalle etichette `X-Gmail-Labels` |
   | Outlook | `.pst` / `.ost` (libpff), singole `.msg` (olefile, anche RTF compresso) |
   | Thunderbird | file mbox e sottocartelle `.sbd` |
@@ -30,6 +30,20 @@ Integra un verificatore di **firme digitali** (CAdES `.p7m`, PAdES, XAdES, Fattu
   | Generico | mbox, Maildir/Maildir++, `.eml`, `.zip` |
 - Gli archivi vengono **convertiti una volta sola** in una cartella `Posta - <nome>` di `.eml`; le volte successive si apre direttamente.
 - mbox letti **in streaming**, anche di molti GB. Importazioni in coda, con avanzamento e annullo.
+
+### Calendario, attività, contatti, chat, note e file
+Tutto ciò che l'export contiene oltre alla posta compare in **sezioni** a sinistra (Posta, Calendario, Attività, Contatti, Chat, Note, File, con il numero di elementi), ognuna con cartelle, ricerca, anteprima, stampa in PDF ed **esportazione in `.ics`, `.vcf` o `.csv`** (i file della Valigetta si aprono o si salvano).
+
+| Da dove | Cosa viene letto |
+|---|---|
+| Zimbra / Carbonio (`.tgz`) | appuntamenti (`.appt`), attività (`.task`), contatti e gruppi (metadati `.meta`), chat (`.chat`), note, Valigetta (Briefcase) |
+| Google Takeout | Calendar (`.ics`), Contatti (`.vcf`), Tasks (`Tasks.json`), Keep (`.json`), Google Chat (`messages.json`) |
+| Microsoft Outlook | elementi di calendario, attività, contatti e note dentro `.pst`/`.ost` e `.msg`; contatti `.csv` |
+| Apple / iCloud | Calendario e Promemoria (`.ics`), Contatti (`.vcf`) |
+| Thunderbird | rubrica (`abook.sqlite`), calendario locale (`local.sqlite`), `.ics`/`.vcf` esportati |
+| Qualsiasi programma | `.ics`, `.vcs` (eventi, attività, diario), `.vcf` (vCard 2.1/3.0/4.0, anche quoted-printable), CSV di contatti |
+
+Eventi con fuso orario, giorni interi, ricorrenze (in chiaro: «ogni settimana · lun, mer»), partecipanti con risposta, priorità e stato delle attività. Gli indici creati dalle versioni precedenti vengono completati in automatico alla prima apertura.
 
 ### Ricerca e lettura
 - Indice **SQLite** (`zimbra_index.db`) dentro la cartella, con **percorsi relativi**: la cartella si può spostare o copiare senza re-indicizzare.
@@ -51,6 +65,12 @@ Integra un verificatore di **firme digitali** (CAdES `.p7m`, PAdES, XAdES, Fattu
 
 ### Interfaccia
 - Tema scuro, finestra **a istanza singola** (le nuove aperture vengono passate alla finestra già aperta), lavori lunghi in finestre **non modali** riducibili nella barra di stato.
+
+### Accessibilità (WCAG 2.2 AA / EN 301 549)
+- **Tastiera**: focus sempre visibile; frecce in sezioni, cartelle ed elenchi (l'anteprima segue); **Spazio** spunta, **Invio** apre; tasto Menu / Maiusc+F10 per le azioni; **F6** passa tra le zone della finestra; **F1** elenca tutte le scorciatoie.
+- **Lettori di schermo** (NVDA, JAWS, Assistente vocale, VoiceOver, Orca): nomi e descrizioni per pulsanti con sola icona, campi, tabelle, barre di avanzamento e anteprima; conteggi dei risultati segnalati; pagine dell'anteprima in italiano dichiarato.
+- **Vista**: contrasto del testo ≥ 4,5:1 e dei bordi dei controlli ≥ 3:1; **tema ad alto contrasto** (menu *Accessibilità* o automatico se attivo nel sistema); **zoom del testo** con Ctrl+ / Ctrl- / Ctrl+0, anche nell'anteprima.
+- **Movimento**: le animazioni si fermano da sole dopo 5 secondi e si spengono con *Riduci le animazioni* (automatico se il sistema chiede meno movimento).
 
 ## Download e installazione
 
@@ -102,7 +122,7 @@ Senza una libreria facoltativa il resto funziona: le firme risultano *Non verifi
 ## Avvio da sorgente
 
 ```bash
-pip install pyqt6 pyqt6-webengine asn1crypto pyhanko pyhanko-certvalidator cryptography lxml olefile libpff-python
+pip install pyqt6 pyqt6-webengine asn1crypto pyhanko pyhanko-certvalidator cryptography lxml olefile certifi tzdata libpff-python
 ```
 
 ```bash

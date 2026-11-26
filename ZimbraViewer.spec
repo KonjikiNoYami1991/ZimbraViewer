@@ -8,7 +8,7 @@ import glob
 import os
 import sys
 
-VERSIONE = "3.2.0"
+VERSIONE = "3.2.1"
 SCRIPT = sorted(glob.glob("ZimbraViewer *.py"))[-1]
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
@@ -26,7 +26,7 @@ if os.path.exists("TSL-IT.xml"):          # copia offline facoltativa della Trus
     datas.append(("TSL-IT.xml", "."))
 
 hiddenimports = ["PyQt6.QtWebEngineCore", "PyQt6.QtWebEngineWidgets", "PyQt6.QtNetwork", "PyQt6.QtSvg"]
-for opzionale in ("certifi", "olefile", "pypff"):
+for opzionale in ("certifi", "olefile", "pypff", "tzdata"):
     try:
         __import__(opzionale)
         hiddenimports.append(opzionale)

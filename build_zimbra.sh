@@ -27,7 +27,7 @@ if [ "${NO_VENV:-0}" != "1" ]; then
 fi
 "$PYTHON" -m pip install --upgrade pip
 "$PYTHON" -m pip install --upgrade pyinstaller PyQt6 PyQt6-WebEngine asn1crypto pyhanko pyhanko-certvalidator \
-    cryptography lxml olefile certifi pillow
+    cryptography lxml olefile certifi tzdata pillow
 if [ "${NO_PST:-0}" != "1" ]; then
     "$PYTHON" -m pip install libpff-python || echo "[AVVISO] libpff-python non installato: i .pst/.ost non saranno supportati."
 fi

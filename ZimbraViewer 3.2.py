@@ -4,6 +4,19 @@ ZimbraViewer 3.2 - Lettore locale di archivi di posta + verifica firme digitali 
 
 CHANGELOG
 ---------
+3.2.1 (2026-11-26)
+  Aggiunto: oltre alla posta, calendario, attività, contatti, chat, note e file dell'export, in sezioni dedicate
+            della scheda (elenco, ricerca, anteprima, esportazione in .ics / .vcf / .csv, stampa in PDF):
+            Zimbra e Carbonio (.tgz REST: .meta, .appt, .task, .chat, Valigetta), Google Takeout (Calendar, Contatti,
+            Tasks, Keep, Google Chat), Outlook (.pst/.ost e .msg di calendario, attività, contatti e note; CSV dei
+            contatti), Apple/iCloud (.ics, .vcf), Thunderbird (abook.sqlite, local.sqlite) e file .ics/.vcf/.csv singoli.
+            Gli indici delle versioni precedenti vengono completati da soli.
+  Accessibilità (WCAG 2.2 AA / EN 301 549): focus da tastiera sempre visibile, contrasti >= 4,5:1 per i testi e
+            >= 3:1 per i bordi dei controlli, tema ad alto contrasto (anche automatico dalle impostazioni del sistema),
+            zoom del testo (Ctrl+ / Ctrl- / Ctrl+0) anche nell'anteprima, animazioni che si fermano dopo 5 secondi o
+            spente («Riduci le animazioni», anche dal sistema), nomi accessibili per pulsanti, campi, tabelle e
+            anteprima, albero delle cartelle navigabile con le frecce, Spazio/Invio nelle tabelle, menu contestuali
+            da tastiera, F6 tra le zone della finestra, F1 con le scorciatoie, lingua italiana dichiarata nelle pagine.
 3.2 multipiattaforma (2026-11-16)
   Aggiunto: versioni standalone per macOS (.app/.dmg, Apple Silicon e Intel) e Linux (AppImage e .tar.gz per Debian,
             Ubuntu, Fedora, Arch...). Apertura dal Finder ("Apri con", Dock), "Mostra nella cartella" con Finder e file
@@ -179,9 +192,9 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QLineEdit, QTableWidget, QTableWidgetItem, QSplitter, QFileDialog, QHeaderView, QLabel,
                              QTreeWidget, QTreeWidgetItem, QMessageBox, QCheckBox, QScrollArea, QMenu, QTabWidget,
                              QTabBar, QDialog, QProgressBar, QFrame, QSizePolicy, QComboBox, QStackedWidget,
-                             QTextBrowser, QGraphicsOpacityEffect)
+                             QTextBrowser, QGraphicsOpacityEffect, QListWidget, QListWidgetItem)
 from PyQt6.QtCore import (Qt, QThread, QObject, pyqtSignal, QTimer, QUrl, QSize, QRectF, QPointF, QSettings,
-                          QPropertyAnimation, QEasingCurve, QEvent)
+                          QPropertyAnimation, QEasingCurve, QEvent, QModelIndex)
 from PyQt6.QtGui import (QIcon, QPixmap, QDesktopServices, QShortcut, QKeySequence, QColor, QPainter, QPen,
                          QLinearGradient)
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
@@ -328,17 +341,41 @@ def prepara_webengine():
 # ==========================================
 # TEMA: PALETTE, FOGLIO DI STILE, ICONE
 # ==========================================
-VERSIONE_APP = "3.2"
+VERSIONE_APP = "3.2.1"
 NOME_APP = f"ZimbraViewer {VERSIONE_APP}"
 
 C = {   # palette scura "inchiostro e lavanda"
     "sfondo": "#13141B", "superficie": "#1A1B24", "rilievo": "#22232E", "hover": "#2A2C39",
     "bordo": "#2E303D", "bordo_tenue": "#24252F", "testo": "#E8E9F0", "attenuato": "#A0A3B8",
-    "tenue": "#6F7287", "accento": "#8E9DFF", "accento_chiaro": "#A9B5FF", "accento_scuro": "#4C57CC",
+    "tenue": "#9094AA", "accento": "#8E9DFF", "accento_chiaro": "#A9B5FF", "accento_scuro": "#4C57CC",
     "accento_medio": "#6B79EE", "su_accento": "#0D0E15", "selezione": "#2D3253",
     "ok": "#5CD3A0", "warn": "#F4C46A", "error": "#F2738D", "none": "#8E92A8", "info": "#7CC4F5",
+    # accessibilità: bordi dei controlli >= 3:1 (WCAG 1.4.11), anello di focus ben visibile (2.4.7)
+    "bordo_controllo": "#70749A", "focus": "#F5F6FF", "carta_hover": "#1D1E29", "bordo_hover": "#3B3E58",
+    "campo_focus": "#252738", "premuto": "#323447", "suggerimento": "#1E2033", "bordo_suggerimento": "#343A66",
+    "barra": "#0E0F15", "scroll": "#3A3C50", "scroll_hover": "#545873",
+}
+# Tema ad alto contrasto (Impostazioni di accessibilità del sistema o menu «Accessibilità»): nero, bianco e giallo
+C_ALTO_CONTRASTO = {
+    "sfondo": "#000000", "superficie": "#000000", "rilievo": "#0A0A0A", "hover": "#1C1C1C",
+    "bordo": "#FFFFFF", "bordo_tenue": "#BFBFBF", "testo": "#FFFFFF", "attenuato": "#F0F0F0",
+    "tenue": "#E0E0E0", "accento": "#FFD400", "accento_chiaro": "#FFE45C", "accento_scuro": "#7A6500",
+    "accento_medio": "#B39500", "su_accento": "#000000", "selezione": "#0047AB",
+    "ok": "#3DFF8C", "warn": "#FFD400", "error": "#FF7A8E", "none": "#E0E0E0", "info": "#7FD4FF",
+    "bordo_controllo": "#FFFFFF", "focus": "#00E5FF", "carta_hover": "#111111", "bordo_hover": "#FFFFFF",
+    "campo_focus": "#000000", "premuto": "#333333", "suggerimento": "#000000", "bordo_suggerimento": "#FFFFFF",
+    "barra": "#000000", "scroll": "#BFBFBF", "scroll_hover": "#FFFFFF",
 }
 COLORE_ESITO = {"ok": C["ok"], "warn": C["warn"], "error": C["error"], "none": C["none"]}
+ACCESSIBILITA = {"scala": 1.0, "alto_contrasto": False, "animazioni_ridotte": False}
+
+
+def applica_palette(alto_contrasto):
+    """Da chiamare prima di creare le finestre: i colori del programma passano al tema ad alto contrasto."""
+    if alto_contrasto:
+        C.update(C_ALTO_CONTRASTO)
+        COLORE_ESITO.update({"ok": C["ok"], "warn": C["warn"], "error": C["error"], "none": C["none"]})
+        _cache_icone.clear()
 
 ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
     <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#A9B5FF"/><stop offset="1" stop-color="#6B79EE"/></linearGradient></defs>
@@ -376,6 +413,11 @@ _TRACCIATI = {
     "aiuto": "M12 3.5a8.5 8.5 0 1 0 0 17a8.5 8.5 0 1 0 0-17z M9.6 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.7 M12 16.8v.2",
     "nuvola": "M7 18.5a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 8.5a4 4 0 0 1-.5 10z",
     "lettere": "M3.5 5.5h11v8h-11z M3.5 6l5.5 4 5.5-4 M9.5 15.5v3h11v-8h-3",
+    "calendario": "M4 6.5h16V20H4z M4 10.5h16 M8.5 3.5v5 M15.5 3.5v5 M8 14h2 M11 14h2 M14 14h2 M8 17h2 M11 17h2",
+    "persona": "M12 4a4 4 0 1 0 0 8a4 4 0 1 0 0-8z M4.5 20.5c.8-3.6 3.8-6 7.5-6s6.7 2.4 7.5 6",
+    "fumetto": "M4 5.5h16v10.5H10l-4.5 3.5V16H4z M8 9.5h8 M8 12.5h5",
+    "accessibilita": "M12 3.5a1.8 1.8 0 1 0 0 3.6a1.8 1.8 0 1 0 0-3.6z M5 8.5l7 1.5 7-1.5 M12 10v4.5 M12 14.5l-3 6 M12 14.5l3 6",
+    "tastiera": "M3 6.5h18v11H3z M6.5 10h1 M10 10h1 M13.5 10h1 M17 10h.5 M7.5 14h9",
 }
 _cache_icone = {}
 
@@ -405,6 +447,10 @@ def pulsante(testo, nome_icona=None, ruolo=None, suggerimento=None, colore_icona
         b.setProperty("ruolo", ruolo)
     if suggerimento:
         b.setToolTip(suggerimento)
+        if not testo:
+            b.setAccessibleName(suggerimento)       # pulsante con sola icona: il lettore di schermo legge questo
+        else:
+            b.setAccessibleDescription(suggerimento)
     b.setCursor(Qt.CursorShape.PointingHandCursor)
     return b
 
@@ -414,8 +460,9 @@ FONT_HTML = ("'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', '
              "'Ubuntu', 'DejaVu Sans', Arial, sans-serif")
 FONT_MONO = "Consolas, 'Cascadia Mono', Menlo, 'SF Mono', 'DejaVu Sans Mono', 'Liberation Mono', monospace"
 
-STILE = f"""
-* {{ outline: 0; }}
+def costruisci_stile(scala=1.0):
+    """Foglio di stile dell'interfaccia; 'scala' ingrandisce tutti i testi (Ctrl + / Ctrl - / Ctrl 0)."""
+    stile = f"""
 QWidget {{ color: {C['testo']}; font-family: {FONT_UI}; font-size: 13px; }}
 QMainWindow, QDialog, QWidget#sfondo, QStackedWidget {{ background-color: {C['sfondo']}; }}
 QLabel {{ background: transparent; }}
@@ -430,14 +477,14 @@ QLabel#versione {{ color: {C['tenue']}; font-size: 12px; }}
 
 QWidget#barraTitolo {{ background-color: {C['superficie']}; border-bottom: 1px solid {C['bordo_tenue']}; }}
 QFrame#carta {{ background-color: {C['superficie']}; border: 1px solid {C['bordo_tenue']}; border-radius: 14px; }}
-QFrame#carta:hover {{ border-color: #3B3E58; background-color: #1D1E29; }}
+QFrame#carta:hover {{ border-color: {C['bordo_hover']}; background-color: {C['carta_hover']}; }}
 QFrame#pannello {{ background-color: {C['superficie']}; border: 1px solid {C['bordo_tenue']}; border-radius: 12px; }}
-QFrame#suggerimento {{ background-color: #1E2033; border: 1px solid #343A66; border-radius: 10px; }}
+QFrame#suggerimento {{ background-color: {C['suggerimento']}; border: 1px solid {C['bordo_suggerimento']}; border-radius: 10px; }}
 
 QPushButton {{ background-color: {C['rilievo']}; color: {C['testo']}; border: 1px solid {C['bordo']};
     border-radius: 8px; padding: 7px 14px; font-weight: 600; }}
-QPushButton:hover {{ background-color: {C['hover']}; border-color: #3D4055; }}
-QPushButton:pressed {{ background-color: #323447; }}
+QPushButton:hover {{ background-color: {C['hover']}; border-color: {C['bordo_controllo']}; }}
+QPushButton:pressed {{ background-color: {C['premuto']}; }}
 QPushButton:disabled {{ color: {C['tenue']}; background-color: {C['superficie']}; border-color: {C['bordo_tenue']}; }}
 QPushButton[ruolo~="primario"] {{ background-color: {C['accento']}; color: {C['su_accento']}; border: 1px solid {C['accento']}; }}
 QPushButton[ruolo~="primario"]:hover {{ background-color: {C['accento_chiaro']}; border-color: {C['accento_chiaro']}; }}
@@ -449,9 +496,9 @@ QPushButton[ruolo~="fantasma"]:hover {{ background-color: {C['rilievo']}; color:
 QPushButton[ruolo~="piccolo"] {{ padding: 3px 10px; font-size: 12px; border-radius: 6px; }}
 QPushButton::menu-indicator {{ width: 0; }}
 
-QLineEdit, QComboBox {{ background-color: {C['rilievo']}; border: 1px solid {C['bordo']}; border-radius: 8px;
+QLineEdit, QComboBox {{ background-color: {C['rilievo']}; border: 1px solid {C['bordo_controllo']}; border-radius: 8px;
     padding: 7px 12px; selection-background-color: {C['accento']}; selection-color: {C['su_accento']}; }}
-QLineEdit:focus, QComboBox:focus {{ border-color: {C['accento']}; background-color: #252738; }}
+QLineEdit:focus, QComboBox:focus {{ border: 2px solid {C['focus']}; padding: 6px 11px; background-color: {C['campo_focus']}; }}
 QLineEdit:disabled {{ color: {C['tenue']}; background-color: {C['superficie']}; }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
 QComboBox QAbstractItemView {{ background-color: {C['rilievo']}; border: 1px solid {C['bordo']};
@@ -463,7 +510,7 @@ QTableWidget::item, QTreeWidget::item {{ padding: 6px 8px; border: none; }}
 QTableWidget::item:hover, QTreeWidget::item:hover {{ background-color: #232533; }}
 QTableWidget::item:selected, QTreeWidget::item:selected {{ background-color: {C['selezione']}; color: {C['testo']}; }}
 QTableView::indicator, QTreeView::indicator, QCheckBox::indicator {{ width: 15px; height: 15px; border-radius: 4px;
-    border: 1px solid #4A4D66; background-color: {C['rilievo']}; }}
+    border: 1px solid {C['bordo_controllo']}; background-color: {C['rilievo']}; }}
 QTableView::indicator:checked, QTreeView::indicator:checked, QCheckBox::indicator:checked {{
     background-color: {C['accento']}; border-color: {C['accento']}; }}
 QCheckBox {{ spacing: 8px; }}
@@ -485,11 +532,11 @@ QSplitter::handle:vertical {{ height: 8px; }}
 QSplitter::handle:hover {{ background-color: #2F3247; border-radius: 3px; }}
 
 QScrollBar:vertical {{ background: transparent; width: 11px; margin: 3px; }}
-QScrollBar::handle:vertical {{ background-color: #3A3C50; border-radius: 4px; min-height: 32px; }}
-QScrollBar::handle:vertical:hover {{ background-color: #545873; }}
+QScrollBar::handle:vertical {{ background-color: {C['scroll']}; border-radius: 4px; min-height: 32px; }}
+QScrollBar::handle:vertical:hover {{ background-color: {C['scroll_hover']}; }}
 QScrollBar:horizontal {{ background: transparent; height: 11px; margin: 3px; }}
-QScrollBar::handle:horizontal {{ background-color: #3A3C50; border-radius: 4px; min-width: 32px; }}
-QScrollBar::handle:horizontal:hover {{ background-color: #545873; }}
+QScrollBar::handle:horizontal {{ background-color: {C['scroll']}; border-radius: 4px; min-width: 32px; }}
+QScrollBar::handle:horizontal:hover {{ background-color: {C['scroll_hover']}; }}
 QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{ width: 0; height: 0; background: none; }}
 
 QMenu {{ background-color: {C['rilievo']}; border: 1px solid {C['bordo']}; border-radius: 10px; padding: 6px; }}
@@ -500,7 +547,7 @@ QMenu::separator {{ height: 1px; background-color: {C['bordo']}; margin: 5px 8px
 QMenu::icon {{ padding-left: 8px; }}
 
 /* Barre di avanzamento: testo bianco in grassetto, leggibile sia sulla parte piena (indaco scuro) sia su quella vuota */
-QProgressBar {{ background-color: #0E0F15; border: 1px solid {C['bordo']}; border-radius: 8px; text-align: center;
+QProgressBar {{ background-color: {C['barra']}; border: 1px solid {C['bordo_controllo']}; border-radius: 8px; text-align: center;
     color: #FFFFFF; font-weight: 700; min-height: 20px; }}
 QProgressBar::chunk {{ border-radius: 7px; background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
     stop:0 {C['accento_scuro']}, stop:1 {C['accento_medio']}); }}
@@ -516,7 +563,28 @@ QToolTip {{ background-color: {C['rilievo']}; color: {C['testo']}; border: 1px s
 QMessageBox {{ background-color: {C['superficie']}; }}
 QMessageBox QLabel {{ color: {C['testo']}; }}
 QMessageBox QPushButton {{ min-width: 84px; }}
+
+QListWidget::item {{ padding: 5px 6px; border-radius: 6px; }}
+QListWidget::item:hover {{ background-color: {C['hover']}; }}
+QListWidget::item:selected {{ background-color: {C['selezione']}; color: {C['testo']}; }}
+
+/* Focus da tastiera sempre visibile (WCAG 2.4.7) */
+QPushButton:focus {{ border: 2px solid {C['focus']}; padding: 6px 13px; }}
+QPushButton[ruolo~="piccolo"]:focus {{ padding: 2px 9px; }}
+QCheckBox:focus {{ border: 2px solid {C['focus']}; border-radius: 4px; padding: 1px 3px; }}
+QTableWidget:focus, QTreeWidget:focus, QListWidget:focus, QTextBrowser:focus, QScrollArea:focus {{
+    border: 2px solid {C['focus']}; }}
+QTableView::item:focus, QTreeView::item:focus, QListView::item:focus {{ border: 1px solid {C['focus']}; }}
+QTabBar:focus {{ border: none; }}
+QTabBar::tab:focus {{ border: 2px solid {C['focus']}; border-radius: 6px; }}
+QMenu::item:selected {{ border: 1px solid {C['focus']}; }}
 """
+    if scala != 1.0:
+        stile = re.sub(r'font-size: ?(\d+(?:\.\d+)?)px',
+                       lambda m: f"font-size: {max(8, round(float(m.group(1)) * scala))}px", stile)
+    return stile
+
+STILE = costruisci_stile()
 
 # ==========================================
 # UTILITA': ERRORI, NOMI DI FILE, PERCORSI, PARTI DELLE MAIL
@@ -707,12 +775,13 @@ def data_da_msg(msg):
 # PAGINA DELLA MAIL: INTESTAZIONI, STORICO DELLA CONVERSAZIONE, PEC
 # L'area di lettura è sempre chiara (come un foglio), indipendentemente dal tema scuro del programma.
 # ==========================================
-P = {"foglio": "#FFFFFF", "testo": "#1D2030", "tenue": "#6B7080", "bordo": "#E1E4EE", "accento": "#6B79EE",
+P = {"foglio": "#FFFFFF", "testo": "#1D2030", "tenue": "#5F6475", "bordo": "#E1E4EE", "accento": "#6B79EE",
+     "accento_testo": "#4C57CC",
      "fondo_blocco": "#F5F6FB", "citazione": "#C9CDE3", "testo_citato": "#555A72",
      "ok": "#1E9E6A", "warn": "#C98A12", "error": "#D6455F"}
 FONT_PAGINA = FONT_HTML
 STILE_BASE_PAGINA = (f"<style>html{{background:{P['foglio']};color:{P['testo']}}}"
-                     f"a{{color:{P['accento']}}}</style>")
+                     f"a{{color:{P['accento_testo']}}}</style>")
 
 # ---------- intestazioni ----------
 _SINONIMI = {"da": "Da", "from": "Da", "mittente": "Da", "inviato": "Data", "sent": "Data", "data": "Data",
@@ -1042,7 +1111,7 @@ def costruisci_html_mail(msg, data_formattata):
         if m:
             return documento[:m.end()] + testata + documento[m.end():]
         return testata + documento
-    return (f"<html><head><meta charset='utf-8'>{STILE_BASE_PAGINA}</head>"
+    return (f"<html lang='it'><head><meta charset='utf-8'>{STILE_BASE_PAGINA}</head>"
             f"<body style=\"margin:0;padding:22px;background:{P['foglio']};color:{P['testo']};font-family:{FONT_PAGINA};"
             f"font-size:14px;line-height:1.5\">{testata}{corpo}</body></html>")
 
@@ -1051,7 +1120,7 @@ def html_avviso(titolo, testo="", nome_icona="busta", colore=None):
     colore = colore or P["accento"]
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="56" height="56"><path d="{_TRACCIATI.get(nome_icona, "")}" '
            f'fill="none" stroke="{colore}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>')
-    return (f"<html><body style=\"margin:0;height:100vh;display:flex;align-items:center;justify-content:center;"
+    return (f"<html lang='it'><body style=\"margin:0;height:100vh;display:flex;align-items:center;justify-content:center;"
             f"background:{P['foglio']};color:{P['tenue']};font-family:{FONT_PAGINA}\">"
             f"<div style='text-align:center;max-width:420px;padding:20px'>{svg}"
             f"<div style='color:{P['testo']};font-size:17px;font-weight:600;margin:14px 0 6px'>{html.escape(titolo)}</div>"
@@ -1157,7 +1226,7 @@ def rileva_sorgente(percorso):
     """Cosa è stato aperto? -> (tipo, descrizione). tipo None = non riconosciuto."""
     if os.path.isdir(percorso):
         if contiene_eml(percorso):
-            return "cartella_eml", "cartella di mail .eml (export Zimbra o simile)"
+            return "cartella_eml", "cartella di mail .eml (export Zimbra, Carbonio o simile)"
         sorgenti = cerca_sorgenti(percorso)
         if sorgenti:
             conta = {}
@@ -1166,6 +1235,8 @@ def rileva_sorgente(percorso):
             nomi = {"mbox": "caselle mbox", "emlx": "mail Apple (.emlx)", "maildir": "mail Maildir",
                     "msg": "mail Outlook (.msg)", "pst": "file Outlook (.pst/.ost)"}
             return "cartella_da_convertire", ", ".join(f"{n} {nomi[t]}" for t, n in conta.items())
+        if contiene_pim(percorso):
+            return "cartella_eml", "cartella con calendario, contatti o altri dati"
         return None, "nessuna mail riconoscibile nella cartella"
     if not os.path.isfile(percorso):
         return None, "percorso inesistente"
@@ -1184,6 +1255,17 @@ def rileva_sorgente(percorso):
         return "pst", "file dati di Outlook"
     if basso.endswith('.mbox') or e_file_mbox(percorso):
         return "mbox", "casella mbox"
+    if basso.endswith(('.ics', '.ical', '.icalendar', '.vcs', '.ifb')):
+        return "pim", "calendario o attività (.ics)"
+    if basso.endswith(('.vcf', '.vcard')):
+        return "pim", "rubrica (.vcf)"
+    if basso.endswith('.csv'):
+        try:
+            with open(percorso, 'rb') as f:
+                if elementi_csv_contatti(f.read(65536)):
+                    return "pim", "rubrica (.csv)"
+        except OSError:
+            pass
     return None, "formato non supportato"
 
 # ---------- etichette Gmail (Google Takeout) ----------
@@ -1522,6 +1604,49 @@ class LettoreMsg:
             rtf=decomprimi_rtf(rtf) if isinstance(rtf, bytes) else None,
             allegati=allegati, message_id=p(0x1035) or "")
 
+def _msg_nominate(lettore):
+    """Proprietà con nome di un .msg: {LID: id della proprietà 0x8000+} (solo quelle numeriche)."""
+    dati = lettore._stream("__nameid_version1.0/__substg1.0_00030102") or b""
+    mappa = {}
+    for pos in range(0, len(dati) - 7, 8):
+        ident, info = struct.unpack('<II', dati[pos:pos + 8])
+        if info & 1 == 0:                       # numerica: ident = LID
+            mappa[ident] = 0x8000 + (info >> 16)
+    return mappa
+
+
+_PROP_CONTATTO = (0x3001, 0x3A06, 0x3A11, 0x3A16, 0x3A17, 0x3A1C, 0x3A08, 0x3A09, 0x3A24, 0x3A1F, 0x3A29, 0x3A2A,
+                  0x3A27, 0x3A28, 0x3A26, 0x3A5D, 0x3A5B, 0x3A59, 0x3A5C, 0x3A5A, 0x3A51)
+
+
+def msg_pim(sorgente):
+    """.msg di calendario, attività, contatto o nota -> (estensione, byte) oppure None se è una mail."""
+    if not OLEFILE_OK:
+        return None
+    lettore = LettoreMsg(sorgente)
+    try:
+        classe = lettore._prop("", 0x001A)
+        tipo = tipo_classe_outlook(classe if isinstance(classe, str) else "")
+        if tipo is None:
+            return None
+        prop_str = {pid: v for pid in _PROP_CONTATTO for v in [lettore._prop("", pid)] if isinstance(v, str)}
+        fisse = lettore._fisse("", 32)
+        nominate = {}
+        for lid, pid in _msg_nominate(lettore).items():
+            v = lettore._prop("", pid)
+            if isinstance(v, str):
+                nominate[lid] = v
+                prop_str[pid] = v
+            elif pid in fisse:
+                nominate[lid] = fisse[pid]
+        oggetto = lettore._prop("", 0x0037)
+        corpo = lettore._prop("", 0x1000)
+        return pim_outlook(tipo, prop_str, fisse, nominate, oggetto if isinstance(oggetto, str) else "",
+                           corpo if isinstance(corpo, str) else "")
+    finally:
+        lettore.chiudi()
+
+
 def msg_in_eml(sorgente):
     lettore = LettoreMsg(sorgente)
     try:
@@ -1560,6 +1685,30 @@ def _pff_val(oggetto, nome):
         return getattr(oggetto, nome)
     except Exception:
         return None
+
+def _pff_pim(m):
+    """Elemento di un .pst/.ost che non è una mail -> (estensione, byte) oppure None."""
+    classe = _pff_entry(m, (0x001A,))
+    tipo = tipo_classe_outlook(classe if isinstance(classe, str) else "")
+    if tipo is None:
+        return None
+    prop_str, prop_data = {}, {}
+    try:
+        for rs in m.record_sets:
+            for e in rs.entries:
+                try:
+                    vt = e.value_type
+                    if vt in (0x001F, 0x001E):
+                        prop_str[e.entry_type] = e.data_as_string
+                    elif vt == 0x0040:
+                        prop_data[e.entry_type] = e.data_as_datetime
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    corpo = _decodifica_corpo(_pff_val(m, "plain_text_body")) or ""
+    return pim_outlook(tipo, prop_str, prop_data, {}, _pff_val(m, "subject") or "", corpo)
+
 
 def _pff_messaggio(m, profondita=0):
     destinatari = {1: [], 2: [], 3: []}
@@ -1638,6 +1787,20 @@ class ConvertitorePosta:
             f.write(dati)
         self.convertite += 1
 
+    def scrivi_file(self, logica, estensione, dati):
+        """Elemento non di posta (calendario, attività, contatto, nota) salvato come .ics / .vcf."""
+        d = self._cartella(logica)
+        n = self._numeri.get(d, 0)
+        while True:
+            n += 1
+            p = os.path.join(d, f"{n:06d}{estensione}")
+            if not os.path.exists(p):
+                break
+        self._numeri[d] = n
+        with open(p, 'wb') as f:
+            f.write(dati)
+        self.elementi = getattr(self, "elementi", 0) + 1
+
     def mbox(self, percorso, logica, quota=(0.0, 1.0)):
         """mbox in streaming (file anche di molti GB): Gmail usa le etichette X-Gmail-Labels come cartelle."""
         totale = max(1, os.path.getsize(percorso))
@@ -1715,7 +1878,15 @@ class ConvertitorePosta:
             if self._annullato():
                 return
             try:
-                self.scrivi(logica, msg_bytes(_pff_messaggio(cartella.get_sub_message(i))))
+                m = cartella.get_sub_message(i)
+                try:
+                    pim = _pff_pim(m)
+                except Exception:
+                    pim = None                      # non riconosciuto: si converte come mail
+                if pim is not None:
+                    self.scrivi_file(logica, *pim)
+                else:
+                    self.scrivi(logica, msg_bytes(_pff_messaggio(m)))
             except Exception as e:
                 self.errori.append(f"{logica} #{i + 1}: {e}")
             fatte[0] += 1
@@ -1747,6 +1918,14 @@ class ConvertitorePosta:
                     if tipo == "emlx":
                         dati = emlx_in_eml(dati)
                     elif tipo == "msg":
+                        try:
+                            pim = msg_pim(p)
+                        except Exception:
+                            pim = None              # non riconosciuto: si converte come mail
+                        if pim is not None:
+                            self.scrivi_file(logica or "Outlook", *pim)
+                            fatto += peso
+                            continue
                         dati = msg_in_eml(p)
                     self.scrivi(logica or "Posta", dati)
             except Exception as e:
@@ -1812,7 +1991,7 @@ def importa_posta(sorgente, dest, avanzamento=None, annullato=None):
         info["tipo"] = "archivio"
         if not estrai_archivio(sorgente, dest, lambda f, t: avanzamento(f * 0.5, t), annullato):
             return False, info
-        if contiene_eml(dest):
+        if contiene_eml(dest) or (contiene_pim(dest) and not cerca_sorgenti(dest)):
             avanzamento(1.0, "Estrazione completata")
             return True, info
         elenco = cerca_sorgenti(dest)
@@ -1825,11 +2004,18 @@ def importa_posta(sorgente, dest, avanzamento=None, annullato=None):
         _rimuovi_cartelle_vuote(dest)
     elif os.path.isdir(sorgente):
         info["tipo"] = "cartella"
-        conv.sorgenti(cerca_sorgenti(sorgente), (0.0, 1.0))
+        conv.sorgenti(cerca_sorgenti(sorgente), (0.0, 0.95))
+        copia_file_pim(sorgente, dest, conv)
     else:
         tipo, _d = rileva_sorgente(sorgente)
         info["tipo"] = tipo or ""
-        if tipo == "pst":
+        if tipo == "pim":
+            d = os.path.join(dest, "Calendario" if sorgente.lower().endswith(('.ics', '.ical', '.icalendar', '.vcs', '.ifb'))
+                             else "Contatti")
+            os.makedirs(d, exist_ok=True)
+            shutil.copy2(sorgente, os.path.join(d, nome_windows_sicuro(os.path.basename(sorgente), 120, "dati")))
+            conv.elementi = 1
+        elif tipo == "pst":
             conv.pst(sorgente)
         elif tipo == "mbox":
             base = os.path.splitext(os.path.basename(sorgente))[0]
@@ -1837,12 +2023,31 @@ def importa_posta(sorgente, dest, avanzamento=None, annullato=None):
         else:
             raise ValueError("formato non supportato")
     info["convertite"], info["errori"] = conv.convertite, conv.errori
+    info["elementi"] = getattr(conv, "elementi", 0)
     if annullato():
         return False, info
-    if conv.convertite == 0 and not contiene_eml(dest):
-        raise ValueError("nessuna mail trovata da convertire" + (f" ({conv.errori[0]})" if conv.errori else ""))
-    avanzamento(1.0, f"{conv.convertite} mail pronte")
+    if conv.convertite == 0 and not info["elementi"] and not contiene_eml(dest) and not contiene_pim(dest):
+        raise ValueError("nessuna mail o altro dato trovato da convertire" + (f" ({conv.errori[0]})" if conv.errori else ""))
+    avanzamento(1.0, f"{conv.convertite} mail pronte" + (f", {info['elementi']} altri elementi" if info["elementi"] else ""))
     return True, info
+
+
+def copia_file_pim(sorgente, dest, conv=None):
+    """Copia nella cartella pronta calendario, rubrica, attività, note e chat trovati nella cartella d'origine."""
+    for p in cerca_file_pim(sorgente):
+        rel = os.path.relpath(p, sorgente)
+        parti = [nome_windows_sicuro(x, 120, "_") for x in rel.replace('\\', '/').split('/') if x not in ("", ".", "..")]
+        if not parti:
+            continue
+        t = os.path.join(dest, "Altri dati", *parti)
+        try:
+            os.makedirs(os.path.dirname(t), exist_ok=True)
+            shutil.copy2(p, t)
+            if conv is not None:
+                conv.elementi = getattr(conv, "elementi", 0) + 1
+        except OSError as e:
+            if conv is not None:
+                conv.errori.append(f"{os.path.basename(p)}: {e}")
 
 def _rimuovi_cartelle_vuote(radice):
     for r, dirs, files in os.walk(radice, topdown=False):
@@ -1864,6 +2069,1086 @@ def converti_singola_in_eml(percorso):
     with open(out, 'wb') as f:
         f.write(dati)
     return out
+
+# ==========================================
+# DATI PERSONALI: CALENDARIO, ATTIVITA', CONTATTI, CHAT, NOTE, FILE
+# Oltre alla posta, gli export contengono agenda, rubrica, attività, chat, note e documenti. Qui si leggono:
+#   standard          .ics/.ical/.vcs (eventi, attività, diario), .vcf (vCard 2.1/3.0/4.0), CSV di contatti
+#   Zimbra / Carbonio .tgz REST (fmt=tgz): ogni elemento ha un .meta JSON con "type" (appointment, task, contact,
+#                     chat, document, note, wiki); appuntamenti e attività stanno in .appt/.task (messaggio d'invito
+#                     con la parte text/calendar), contatti nei campi "fld" dei metadati, chat in .chat (MIME)
+#   Google Takeout    Calendar/*.ics, Contacts/*.vcf, Tasks/Tasks.json, Keep/*.json, Google Chat/**/messages.json
+#   Microsoft         .pst/.ost e .msg di tipo IPM.Appointment, IPM.Task, IPM.Contact, IPM.StickyNote (convertiti
+#                     in .ics/.vcf durante l'importazione), CSV dei contatti di Outlook
+#   Apple / iCloud    .ics (Calendario, Promemoria), .vcf (Contatti)
+#   Thunderbird       abook.sqlite (rubrica) e calendar-data/local.sqlite (calendario locale)
+# Ogni elemento diventa un dizionario: tipo, titolo, inizio, fine, luogo, persone, testo (per la ricerca),
+# campi (etichetta, valore) per il dettaglio, descrizione, messaggi (chat) e il testo originale per riesportarlo.
+# ==========================================
+TIPI_PIM = [  # (tipo, nome della sezione, icona)
+    ("evento", "Calendario", "calendario"),
+    ("attivita", "Attività", "spunta"),
+    ("contatto", "Contatti", "persona"),
+    ("chat", "Chat", "fumetto"),
+    ("nota", "Note", "documento"),
+    ("file", "File", "graffetta"),
+]
+NOMI_TIPI_PIM = {t: n for t, n, _i in TIPI_PIM}
+ESTENSIONI_PIM = ('.ics', '.ical', '.icalendar', '.ifb', '.vcs', '.vcf', '.vcard', '.csv', '.json', '.meta',
+                  '.chat', '.appt', '.task')
+_TRADUZIONI_CARTELLE_PIM = {
+    "calendar": "Calendario", "calendars": "Calendario", "calendario": "Calendario", "contacts": "Contatti",
+    "contatti": "Contatti", "emailed contacts": "Contatti automatici", "tasks": "Attività", "attività": "Attività",
+    "briefcase": "Valigetta", "valigetta": "Valigetta", "chats": "Chat", "chat": "Chat", "notebook": "Note",
+    "notes": "Note", "keep": "Note", "google chat": "Chat", "reminders": "Promemoria",
+}
+
+
+def _cartella_pim(rel_dir):
+    parti = [re.sub(r'!\d+$', '', p) for p in rel_dir.replace('\\', '/').split('/') if p and p != '.']
+    if parti:
+        parti[0] = _TRADUZIONI_CARTELLE_PIM.get(parti[0].lower(), parti[0])
+    return "/".join(parti)
+
+
+def _leggi_testo(dati):
+    if isinstance(dati, str):
+        return dati
+    for cod in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            return dati.decode(cod)
+        except UnicodeDecodeError:
+            continue
+    return dati.decode("utf-8", "replace")
+
+
+def _fmt(dt, tutto_giorno=False):
+    if dt is None:
+        return ""
+    if isinstance(dt, datetime):
+        if dt.tzinfo is not None:
+            try:
+                dt = dt.astimezone()       # ora locale del computer
+            except (OverflowError, OSError, ValueError):
+                pass
+        return dt.strftime("%Y-%m-%d") if tutto_giorno else dt.strftime("%Y-%m-%d %H:%M")
+    return str(dt)
+
+
+def _da_epoca(valore):
+    """Secondi o millisecondi dall'epoca -> datetime locale."""
+    try:
+        v = float(valore)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    if v > 1e14:
+        v /= 1e6
+    elif v > 1e11:
+        v /= 1000.0
+    try:
+        return datetime.fromtimestamp(v, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _iso(valore):
+    try:
+        return datetime.fromisoformat(str(valore).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def nuovo_elemento(tipo, titolo="", **altri):
+    e = {"tipo": tipo, "titolo": (titolo or "").strip(), "inizio": "", "fine": "", "luogo": "", "persone": "",
+         "campi": [], "descrizione": "", "cartella": ""}
+    e.update(altri)
+    return e
+
+
+def _testo_ricerca(e):
+    pezzi = [e.get("titolo", ""), e.get("luogo", ""), e.get("persone", ""), e.get("descrizione", "")]
+    pezzi += [str(v) for _k, v in e.get("campi", [])]
+    pezzi += [f"{m.get('autore', '')} {m.get('testo', '')}" for m in e.get("messaggi", [])]
+    return "\n".join(p for p in pezzi if p)[:200000]
+
+
+# ---------- iCalendar (RFC 5545) ----------
+def _righe_spiegate(testo):
+    """Righe logiche: le righe che iniziano con spazio/tab continuano la precedente."""
+    righe = []
+    for r in testo.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if r[:1] in (" ", "\t") and righe:
+            righe[-1] += r[1:]
+        elif r.strip():
+            righe.append(r)
+    return righe
+
+
+def _scomponi_riga(riga):
+    """'NOME;PARAM=val;P2="a,b":valore' -> (NOME, {PARAM: val}, valore). I due punti tra virgolette non contano."""
+    tra_virgolette, pos = False, -1
+    for i, c in enumerate(riga):
+        if c == '"':
+            tra_virgolette = not tra_virgolette
+        elif c == ':' and not tra_virgolette:
+            pos = i
+            break
+    if pos < 0:
+        return riga.upper(), {}, ""
+    testa, valore = riga[:pos], riga[pos + 1:]
+    parti = re.findall(r'(?:[^;"]|"[^"]*")+', testa)
+    nome = parti[0].strip().upper() if parti else ""
+    if "." in nome:                        # vCard: "item1.EMAIL" -> EMAIL
+        nome = nome.split(".", 1)[1]
+    parametri = {}
+    for p in parti[1:]:
+        k, _s, v = p.partition("=")
+        k = k.strip().upper()
+        v = v.strip().strip('"')
+        if not _s:                         # vCard 2.1: "TEL;CELL;VOICE:..." -> TYPE
+            parametri.setdefault("TYPE", [])
+            parametri["TYPE"] = (parametri["TYPE"] if isinstance(parametri["TYPE"], list) else [parametri["TYPE"]]) + [k]
+        else:
+            parametri[k] = v
+    return nome, parametri, valore
+
+
+def _sfuggi_ics(v):
+    return (v.replace("\\n", "\n").replace("\\N", "\n").replace("\\,", ",").replace("\\;", ";")
+            .replace("\\:", ":").replace("\\\\", "\\"))
+
+
+def _data_ics(valore, parametri):
+    """-> (datetime/date-string, tutto_giorno)."""
+    v = valore.strip()
+    if not v:
+        return None, False
+    if parametri.get("VALUE", "").upper() == "DATE" or re.fullmatch(r'\d{8}', v):
+        try:
+            return datetime.strptime(v[:8], "%Y%m%d"), True
+        except ValueError:
+            return None, False
+    m = re.fullmatch(r'(\d{8})T(\d{4})(\d{2})?(Z)?', v)
+    if not m:
+        return None, False
+    try:
+        dt = datetime.strptime(m.group(1) + m.group(2) + (m.group(3) or "00"), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None, False
+    if m.group(4):
+        return dt.replace(tzinfo=timezone.utc), False
+    tzid = parametri.get("TZID", "")
+    if tzid:
+        try:
+            from zoneinfo import ZoneInfo
+            dt = dt.replace(tzinfo=ZoneInfo(_tzid_iana(tzid)))
+        except Exception:
+            pass                           # fuso sconosciuto (es. nomi Windows): resta l'ora così come scritta
+    return dt, False
+
+
+_TZ_WINDOWS = {"w. europe standard time": "Europe/Rome", "romance standard time": "Europe/Paris",
+               "central europe standard time": "Europe/Budapest", "gmt standard time": "Europe/London",
+               "utc": "UTC", "eastern standard time": "America/New_York", "pacific standard time": "America/Los_Angeles",
+               "central standard time": "America/Chicago"}
+
+
+def _tzid_iana(tzid):
+    t = tzid.strip().strip('"')
+    if "/" in t and not t.startswith("/"):
+        m = re.search(r'([A-Za-z_]+/[A-Za-z_]+(?:/[A-Za-z_]+)?)$', t)    # "/mozilla.org/.../Europe/Rome"
+        return m.group(1) if m else t
+    return _TZ_WINDOWS.get(t.lower(), t)
+
+
+def _durata_ics(v):
+    m = re.fullmatch(r'([+-])?P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?', v.strip())
+    if not m:
+        return None
+    segno = -1 if m.group(1) == "-" else 1
+    w, d, h, mi, s = (int(x or 0) for x in m.groups()[1:])
+    return segno * timedelta(weeks=w, days=d, hours=h, minutes=mi, seconds=s)
+
+
+_FREQ = {"DAILY": "ogni giorno", "WEEKLY": "ogni settimana", "MONTHLY": "ogni mese", "YEARLY": "ogni anno",
+         "HOURLY": "ogni ora", "MINUTELY": "ogni minuto"}
+_GIORNI = {"MO": "lun", "TU": "mar", "WE": "mer", "TH": "gio", "FR": "ven", "SA": "sab", "SU": "dom"}
+
+
+def _ripetizione_leggibile(rrule):
+    p = dict(x.split("=", 1) for x in rrule.split(";") if "=" in x)
+    testo = _FREQ.get(p.get("FREQ", "").upper(), p.get("FREQ", "").lower())
+    if p.get("INTERVAL", "1") not in ("", "1"):
+        testo += f" (ogni {p['INTERVAL']})"
+    if p.get("BYDAY"):
+        testo += " · " + ", ".join(_GIORNI.get(g[-2:], g) for g in p["BYDAY"].split(","))
+    if p.get("COUNT"):
+        testo += f" · {p['COUNT']} volte"
+    if p.get("UNTIL"):
+        d, _t = _data_ics(p["UNTIL"], {})
+        testo += f" · fino al {_fmt(d, True) if d else p['UNTIL']}"
+    return testo
+
+
+def _persona_ics(valore, parametri):
+    nome = parametri.get("CN", "").strip('"')
+    ind = re.sub(r'(?i)^mailto:', '', valore.strip())
+    return f"{nome} <{ind}>" if nome and ind and nome != ind else (nome or ind)
+
+
+_STATO_ICS = {"CONFIRMED": "confermato", "TENTATIVE": "provvisorio", "CANCELLED": "annullato",
+              "NEEDS-ACTION": "da fare", "COMPLETED": "completata", "IN-PROCESS": "in corso"}
+_PARTECIPAZIONE = {"ACCEPTED": "accettato", "DECLINED": "rifiutato", "TENTATIVE": "forse",
+                   "NEEDS-ACTION": "nessuna risposta", "DELEGATED": "delegato"}
+
+
+def elementi_ics(testo, cartella=""):
+    """Eventi (VEVENT), attività (VTODO) e voci di diario (VJOURNAL) di un file iCalendar."""
+    out = []
+    pila, corrente, righe_raw, nome_cal = [], None, [], ""
+    for riga in _righe_spiegate(_leggi_testo(testo)):
+        nome, par, val = _scomponi_riga(riga)
+        if nome == "BEGIN":
+            comp = val.strip().upper()
+            pila.append(comp)
+            if comp in ("VEVENT", "VTODO", "VJOURNAL") and corrente is None:
+                corrente, righe_raw = {"_comp": comp, "_prop": []}, [riga]
+                continue
+        elif nome == "END":
+            comp = val.strip().upper()
+            if pila:
+                pila.pop()
+            if corrente is not None and comp == corrente["_comp"]:
+                righe_raw.append(riga)
+                corrente["_raw"] = "\r\n".join(righe_raw)
+                out.append(corrente)
+                corrente = None
+                continue
+        elif nome == "X-WR-CALNAME" and corrente is None:
+            nome_cal = _sfuggi_ics(val).strip()
+        if corrente is not None:
+            righe_raw.append(riga)
+            if pila and pila[-1] == corrente["_comp"]:     # niente proprietà dei VALARM annidati
+                corrente["_prop"].append((nome, par, val))
+    risultati = []
+    for c in out:
+        tipo = {"VEVENT": "evento", "VTODO": "attivita", "VJOURNAL": "nota"}[c["_comp"]]
+        e = nuovo_elemento(tipo, cartella=(f"{cartella}/{nome_cal}" if cartella and nome_cal and not cartella.endswith(nome_cal)
+                                           else nome_cal or cartella))
+        inizio = fine = scadenza = None
+        tutto_giorno = False
+        partecipanti, categorie = [], []
+        durata = None
+        for nome, par, val in c["_prop"]:
+            v = _sfuggi_ics(val)
+            if nome == "SUMMARY":
+                e["titolo"] = v.strip()
+            elif nome == "DTSTART":
+                inizio, tutto_giorno = _data_ics(val, par)
+            elif nome == "DTEND":
+                fine, _t = _data_ics(val, par)
+            elif nome == "DUE":
+                scadenza, _t = _data_ics(val, par)
+            elif nome == "DURATION":
+                durata = _durata_ics(val)
+            elif nome == "LOCATION":
+                e["luogo"] = v.strip()
+            elif nome == "DESCRIPTION":
+                e["descrizione"] = v.strip()
+            elif nome == "ORGANIZER":
+                e["campi"].append(("Organizzatore", _persona_ics(val, par)))
+            elif nome == "ATTENDEE":
+                stato = _PARTECIPAZIONE.get(par.get("PARTSTAT", "").upper(), "")
+                partecipanti.append(_persona_ics(val, par) + (f" ({stato})" if stato else ""))
+            elif nome == "RRULE":
+                e["campi"].append(("Si ripete", _ripetizione_leggibile(val)))
+            elif nome == "STATUS":
+                e["campi"].append(("Stato", _STATO_ICS.get(val.strip().upper(), val.strip().lower())))
+            elif nome == "CATEGORIES":
+                categorie += [x.strip() for x in v.split(",") if x.strip()]
+            elif nome == "PRIORITY" and val.strip() not in ("", "0"):
+                p = int(val) if val.strip().isdigit() else 0
+                e["campi"].append(("Priorità", "alta" if 1 <= p <= 4 else "media" if p == 5 else "bassa" if p else val))
+            elif nome == "PERCENT-COMPLETE":
+                e["campi"].append(("Completamento", f"{val.strip()}%"))
+            elif nome == "COMPLETED":
+                d, _t = _data_ics(val, par)
+                e["campi"].append(("Completata il", _fmt(d)))
+            elif nome == "URL":
+                e["campi"].append(("Collegamento", v.strip()))
+            elif nome == "CLASS" and val.strip().upper() in ("PRIVATE", "CONFIDENTIAL"):
+                e["campi"].append(("Visibilità", "privato"))
+            elif nome == "ATTACH":
+                e["campi"].append(("Allegato", par.get("FILENAME") or par.get("X-FILENAME") or v[:120]))
+        if fine is None and inizio is not None and durata is not None:
+            fine = inizio + durata
+        if tutto_giorno and fine is not None and inizio is not None and (fine - inizio) >= timedelta(days=1):
+            fine = fine - timedelta(days=1)           # DTEND dei giorni interi è esclusivo
+        if tipo == "attivita":
+            e["inizio"] = _fmt(scadenza or inizio, tutto_giorno)
+            if scadenza is not None:
+                e["campi"].insert(0, ("Scadenza", _fmt(scadenza)))
+            if inizio is not None:
+                e["campi"].insert(0, ("Inizio", _fmt(inizio, tutto_giorno)))
+        else:
+            e["inizio"] = _fmt(inizio, tutto_giorno)
+            e["fine"] = _fmt(fine, tutto_giorno) if fine is not None else ""
+        e["tutto_giorno"] = tutto_giorno
+        if partecipanti:
+            e["campi"].append(("Partecipanti", "\n".join(partecipanti)))
+            e["persone"] = ", ".join(partecipanti)
+        if categorie:
+            e["campi"].append(("Categorie", ", ".join(categorie)))
+        e["titolo"] = e["titolo"] or ("(senza titolo)")
+        e["raw"], e["formato_raw"] = c["_raw"], "ics"
+        risultati.append(e)
+    return risultati
+
+
+# ---------- vCard (RFC 2426 / 6350, anche 2.1) ----------
+def _qp(valore, charset):
+    try:
+        return quopri_decode(valore.encode("latin-1", "replace")).decode(charset or "utf-8", "replace")
+    except Exception:
+        return valore
+
+
+def quopri_decode(b):
+    import quopri
+    return quopri.decodestring(b)
+
+
+_TIPI_TEL = {"CELL": "cellulare", "MOBILE": "cellulare", "HOME": "casa", "WORK": "lavoro", "FAX": "fax",
+             "MAIN": "principale", "PAGER": "cercapersone", "IPHONE": "iPhone", "OTHER": "altro", "VOICE": ""}
+
+
+def _etichetta_tipo(par):
+    tipi = par.get("TYPE", [])
+    if isinstance(tipi, str):
+        tipi = tipi.split(",")
+    nomi = [_TIPI_TEL.get(t.strip().upper(), t.strip().lower()) for t in tipi if t.strip()]
+    nomi = [n for n in dict.fromkeys(nomi) if n and n not in ("internet", "pref", "x400")]
+    return ", ".join(nomi)
+
+
+def elementi_vcf(testo, cartella=""):
+    out = []
+    righe = _righe_spiegate_vcard(_leggi_testo(testo))
+    corrente, raw = None, []
+    for riga in righe:
+        nome, par, val = _scomponi_riga(riga)
+        if nome == "BEGIN" and val.strip().upper() == "VCARD":
+            corrente, raw = [], [riga]
+            continue
+        if corrente is None:
+            continue
+        raw.append(riga)
+        if nome == "END" and val.strip().upper() == "VCARD":
+            e = _contatto_da_vcard(corrente, cartella)
+            e["raw"], e["formato_raw"] = "\r\n".join(raw), "vcf"
+            out.append(e)
+            corrente = None
+            continue
+        if par.get("ENCODING", "").upper() in ("QUOTED-PRINTABLE", "Q"):
+            val = _qp(val, par.get("CHARSET"))
+        corrente.append((nome, par, val))
+    return out
+
+
+def _righe_spiegate_vcard(testo):
+    """Come _righe_spiegate, più le righe "soft" del quoted-printable (finiscono con '=')."""
+    righe = []
+    for r in _righe_spiegate(testo):
+        if righe and righe[-1].endswith("=") and "QUOTED-PRINTABLE" in righe[-1].upper().split(":", 1)[0]:
+            righe[-1] = righe[-1][:-1] + r
+        else:
+            righe.append(r)
+    return righe
+
+
+def _contatto_da_vcard(prop, cartella):
+    e = nuovo_elemento("contatto", cartella=cartella)
+    email_, tel, indirizzi, altri = [], [], [], []
+    nome_n = ""
+    for nome, par, val in prop:
+        v = _sfuggi_ics(val).strip()
+        if nome == "FN":
+            e["titolo"] = v
+        elif nome == "N":
+            parti = [x.strip() for x in re.split(r'(?<!\\);', val)]
+            parti = [_sfuggi_ics(x) for x in parti] + [""] * 5
+            nome_n = " ".join(x for x in (parti[3], parti[1], parti[2], parti[0], parti[4]) if x)
+        elif nome == "EMAIL" and v:
+            et = _etichetta_tipo(par)
+            email_.append(v + (f" ({et})" if et else ""))
+        elif nome == "TEL" and v:
+            et = _etichetta_tipo(par)
+            tel.append(re.sub(r'(?i)^tel:', '', v) + (f" ({et})" if et else ""))
+        elif nome == "ADR":
+            parti = [_sfuggi_ics(x).strip() for x in re.split(r'(?<!\\);', val)]
+            testo_ind = ", ".join(x for x in parti if x)
+            if testo_ind:
+                et = _etichetta_tipo(par)
+                indirizzi.append(testo_ind + (f" ({et})" if et else ""))
+        elif nome == "ORG":
+            altri.append(("Azienda", " · ".join(x for x in (_sfuggi_ics(y).strip() for y in re.split(r'(?<!\\);', val)) if x)))
+        elif nome == "TITLE":
+            altri.append(("Ruolo", v))
+        elif nome == "NICKNAME":
+            altri.append(("Soprannome", v))
+        elif nome == "BDAY":
+            d, _t = _data_ics(v.replace("-", "")[:8], {"VALUE": "DATE"}) if re.match(r'\d{4}-?\d{2}-?\d{2}', v) else (None, False)
+            altri.append(("Compleanno", _fmt(d, True) if d else v))
+        elif nome == "URL":
+            altri.append(("Sito web", v))
+        elif nome == "NOTE":
+            e["descrizione"] = v
+        elif nome == "CATEGORIES":
+            altri.append(("Gruppi", v))
+        elif nome == "PHOTO":
+            if val.startswith("data:image"):
+                e["foto"] = val
+            elif par.get("ENCODING", "").upper() in ("B", "BASE64") and len(val) < 400000:
+                tipo = (par.get("TYPE") or ["jpeg"])
+                tipo = (tipo[0] if isinstance(tipo, list) else tipo).lower().replace("image/", "") or "jpeg"
+                e["foto"] = f"data:image/{tipo};base64,{val.strip()}"
+    e["titolo"] = e["titolo"] or nome_n or (email_[0].split(" ")[0] if email_ else "") or "(senza nome)"
+    if email_:
+        e["campi"].append(("Email", "\n".join(email_)))
+    if tel:
+        e["campi"].append(("Telefono", "\n".join(tel)))
+    if indirizzi:
+        e["campi"].append(("Indirizzo", "\n".join(indirizzi)))
+    e["campi"] += [(k, v) for k, v in altri if v]
+    e["persone"] = ", ".join(x.split(" (")[0] for x in email_ + tel)
+    e["luogo"] = next((v for k, v in altri if k == "Azienda"), "")
+    return e
+
+
+# ---------- CSV dei contatti (Google, Outlook, Apple, generici) ----------
+def _norm(s):
+    return re.sub(r'[^a-z0-9]+', ' ', s.lower()).strip()
+
+
+def elementi_csv_contatti(dati, cartella=""):
+    testo = _leggi_testo(dati)
+    try:
+        dialetto = csv.Sniffer().sniff(testo[:4096], delimiters=",;\t")
+    except csv.Error:
+        dialetto = csv.excel
+    righe = list(csv.reader(io.StringIO(testo), dialetto))
+    if len(righe) < 2:
+        return []
+    intest = [_norm(h) for h in righe[0]]
+    col_email = [i for i, h in enumerate(intest) if ("mail" in h) and ("type" not in h and "tipo" not in h and "label" not in h)]
+    col_nome = [i for i, h in enumerate(intest) if h in ("name", "nome", "display name", "full name", "nome visualizzato",
+                                                          "nome completo", "fn")]
+    col_primo = [i for i, h in enumerate(intest) if h in ("given name", "first name", "nome", "nome di battesimo")]
+    col_cognome = [i for i, h in enumerate(intest) if h in ("family name", "last name", "cognome", "surname")]
+    if not col_email or not (col_nome or col_primo or col_cognome):
+        return []
+    col_tel = [i for i, h in enumerate(intest) if ("phone" in h or "telefono" in h or "cellulare" in h or "mobile" in h)
+               and "type" not in h and "label" not in h]
+    col_org = [i for i, h in enumerate(intest) if h in ("organization 1 name", "organization name", "company", "azienda",
+                                                         "società", "societa", "organizzazione")]
+    col_ruolo = [i for i, h in enumerate(intest) if h in ("organization 1 title", "job title", "title", "ruolo", "posizione")]
+    col_note = [i for i, h in enumerate(intest) if h in ("notes", "note")]
+    out = []
+    for r in righe[1:]:
+        r = r + [""] * (len(intest) - len(r))
+        val = lambda cols: [r[i].strip() for i in cols if i < len(r) and r[i].strip()]
+        nome = " ".join(val(col_nome)[:1]) or " ".join(val(col_primo)[:1] + val(col_cognome)[:1])
+        emails = [x for v in val(col_email) for x in re.split(r'\s*:::\s*|;\s*', v) if '@' in x]
+        tel = [x for v in val(col_tel) for x in re.split(r'\s*:::\s*', v) if x]
+        if not (nome or emails or tel):
+            continue
+        e = nuovo_elemento("contatto", nome or emails[0] if (nome or emails) else tel[0], cartella=cartella)
+        if emails:
+            e["campi"].append(("Email", "\n".join(emails)))
+        if tel:
+            e["campi"].append(("Telefono", "\n".join(tel)))
+        for etich, cols in (("Azienda", col_org), ("Ruolo", col_ruolo)):
+            if val(cols):
+                e["campi"].append((etich, val(cols)[0]))
+        e["descrizione"] = "\n".join(val(col_note))
+        e["persone"] = ", ".join(emails + tel)
+        e["luogo"] = (val(col_org) or [""])[0]
+        out.append(e)
+    return out
+
+
+# ---------- Google Takeout: Tasks, Keep, Chat ----------
+def elementi_json(dati, rel, cartella=""):
+    try:
+        j = json.loads(_leggi_testo(dati))
+    except Exception:
+        return []
+    out = []
+    if isinstance(j, dict) and str(j.get("kind", "")).startswith("tasks#"):          # Google Tasks
+        for elenco in j.get("items", []):
+            nome_elenco = elenco.get("title", "") or "Attività"
+            for t in elenco.get("items", []) or []:
+                e = nuovo_elemento("attivita", t.get("title", "") or "(senza titolo)",
+                                   cartella=f"Attività/{nome_elenco}")
+                scad = _iso(t.get("due"))
+                e["inizio"] = _fmt(scad, True) if scad else ""
+                e["descrizione"] = t.get("notes", "") or ""
+                stato = "completata" if t.get("status") == "completed" else "da fare"
+                e["campi"].append(("Stato", stato))
+                if scad:
+                    e["campi"].append(("Scadenza", _fmt(scad, True)))
+                if t.get("completed"):
+                    e["campi"].append(("Completata il", _fmt(_iso(t["completed"]))))
+                for link in t.get("links", []) or []:
+                    e["campi"].append(("Collegamento", link.get("link", "")))
+                out.append(e)
+        return out
+    if isinstance(j, dict) and ("textContent" in j or "listContent" in j) and "userEditedTimestampUsec" in j:  # Keep
+        e = nuovo_elemento("nota", j.get("title", "") or os.path.splitext(os.path.basename(rel))[0], cartella="Note")
+        testo = j.get("textContent", "") or ""
+        if j.get("listContent"):
+            testo += "\n".join(("☑ " if x.get("isChecked") else "☐ ") + x.get("text", "") for x in j["listContent"])
+        e["descrizione"] = testo
+        e["inizio"] = _fmt(_da_epoca(j.get("userEditedTimestampUsec")))
+        etichette = [x.get("name", "") for x in j.get("labels", []) or []]
+        if etichette:
+            e["campi"].append(("Etichette", ", ".join(etichette)))
+        if j.get("isTrashed"):
+            e["campi"].append(("Stato", "nel cestino"))
+        elif j.get("isArchived"):
+            e["campi"].append(("Stato", "archiviata"))
+        if j.get("isPinned"):
+            e["campi"].append(("Fissata", "sì"))
+        return [e]
+    if isinstance(j, dict) and isinstance(j.get("messages"), list) and (
+            not j["messages"] or isinstance(j["messages"][0], dict) and "creator" in j["messages"][0]):  # Google Chat
+        cartella_gc = os.path.dirname(rel)
+        nome_gruppo = os.path.basename(cartella_gc)
+        info_file = os.path.join(os.path.dirname(os.path.abspath(rel)), "group_info.json")
+        partecipanti = []
+        try:
+            with open(info_file, encoding="utf-8") as f:
+                info = json.load(f)
+            nome_gruppo = info.get("name") or nome_gruppo
+            partecipanti = [m.get("name") or m.get("email", "") for m in info.get("members", [])]
+        except Exception:
+            pass
+        messaggi = []
+        for m in j["messages"]:
+            autore = (m.get("creator") or {}).get("name") or (m.get("creator") or {}).get("email", "")
+            data = m.get("created_date", "") or m.get("updated_date", "")
+            testo = m.get("text", "")
+            for a in m.get("attached_files", []) or []:
+                testo += f"\n[allegato: {a.get('original_name') or a.get('export_name', '')}]"
+            messaggi.append({"autore": autore, "data": _data_google_chat(data), "testo": testo})
+        if not messaggi:
+            return []
+        if not partecipanti:
+            partecipanti = list(dict.fromkeys(m["autore"] for m in messaggi if m["autore"]))
+        e = nuovo_elemento("chat", nome_gruppo or "Conversazione", cartella="Chat/Google Chat")
+        e["messaggi"] = messaggi
+        e["inizio"], e["fine"] = messaggi[0]["data"], messaggi[-1]["data"]
+        e["persone"] = ", ".join(partecipanti)
+        e["campi"] = [("Partecipanti", "\n".join(partecipanti)), ("Messaggi", str(len(messaggi)))]
+        return [e]
+    return []
+
+
+def _data_google_chat(testo):
+    """'Wednesday, 3 April 2024 at 10:15:02 UTC' (o in altre lingue) -> 'AAAA-MM-GG HH:MM' se riconosciuta."""
+    m = re.search(r'(\d{1,2}) (\w+) (\d{4})\D+(\d{1,2}):(\d{2})', testo or "")
+    mesi = {"january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6, "july": 7, "august": 8,
+            "september": 9, "october": 10, "november": 11, "december": 12, "gennaio": 1, "febbraio": 2, "marzo": 3,
+            "aprile": 4, "maggio": 5, "giugno": 6, "luglio": 7, "agosto": 8, "settembre": 9, "ottobre": 10,
+            "novembre": 11, "dicembre": 12}
+    if m and m.group(2).lower() in mesi:
+        try:
+            dt = datetime(int(m.group(3)), mesi[m.group(2).lower()], int(m.group(1)), int(m.group(4)), int(m.group(5)),
+                          tzinfo=timezone.utc if "UTC" in testo else None)
+            return _fmt(dt)
+        except ValueError:
+            pass
+    d = _iso(testo)
+    return _fmt(d) if d else (testo or "")
+
+
+# ---------- Zimbra / Carbonio: .meta JSON (ItemData) + metadati in BEncoding ----------
+def decodifica_bencode(testo):
+    """Metadati Zimbra (classe Metadata): stile bencode, d...e dizionari, l...e liste, i...e interi,
+    <lunghezza in byte>:<stringa>. Restituisce dict/list/int/str."""
+    b = testo.encode("utf-8") if isinstance(testo, str) else testo
+    pos = [0]
+
+    def valore():
+        c = b[pos[0]:pos[0] + 1]
+        if c == b"d":
+            pos[0] += 1
+            d = {}
+            while b[pos[0]:pos[0] + 1] != b"e":
+                k = valore()
+                d[str(k)] = valore()
+            pos[0] += 1
+            return d
+        if c == b"l":
+            pos[0] += 1
+            lista = []
+            while b[pos[0]:pos[0] + 1] != b"e":
+                lista.append(valore())
+            pos[0] += 1
+            return lista
+        if c == b"i":
+            fine = b.index(b"e", pos[0])
+            n = b[pos[0] + 1:fine]
+            pos[0] = fine + 1
+            try:
+                return int(n)
+            except ValueError:
+                return n.decode("ascii", "replace")
+        if c.isdigit():
+            due = b.index(b":", pos[0])
+            lung = int(b[pos[0]:due])
+            s = b[due + 1:due + 1 + lung]
+            pos[0] = due + 1 + lung
+            return s.decode("utf-8", "replace")
+        if c in (b"t", b"f"):                # booleani (se presenti)
+            pos[0] += 1
+            return c == b"t"
+        raise ValueError(f"metadati non riconosciuti alla posizione {pos[0]}")
+
+    return valore()
+
+
+_CAMPI_ZIMBRA = [
+    ("Email", ("email", "email2", "email3", "workEmail1", "workEmail2", "workEmail3", "homeEmail")),
+    ("Cellulare", ("mobilePhone", "mobile2Phone")),
+    ("Telefono lavoro", ("workPhone", "workPhone2", "companyPhone", "assistantPhone")),
+    ("Telefono casa", ("homePhone", "homePhone2")),
+    ("Altro telefono", ("otherPhone", "carPhone", "callbackPhone", "pager")),
+    ("Fax", ("workFax", "homeFax", "otherFax")),
+    ("Azienda", ("company",)), ("Reparto", ("department",)), ("Ruolo", ("jobTitle",)),
+    ("Soprannome", ("nickname",)), ("Compleanno", ("birthday",)), ("Anniversario", ("anniversary",)),
+    ("Sito web", ("homeURL", "workURL", "otherURL")),
+]
+
+
+def _contatto_zimbra(fld, cartella):
+    nome = fld.get("fullName") or " ".join(x for x in (fld.get("namePrefix"), fld.get("firstName"), fld.get("middleName"),
+                                                       fld.get("lastName"), fld.get("nameSuffix")) if x)
+    e = nuovo_elemento("contatto", nome or fld.get("fileAs", "") or fld.get("company", "") or fld.get("email", "")
+                       or "(senza nome)", cartella=cartella)
+    usati = {"fullName", "namePrefix", "firstName", "middleName", "lastName", "nameSuffix", "fileAs", "notes",
+             "image", "type", "dlist", "nickname"}
+    for etich, chiavi in _CAMPI_ZIMBRA:
+        valori = [str(fld[k]) for k in chiavi if fld.get(k)]
+        usati.update(chiavi)
+        if valori:
+            e["campi"].append((etich, "\n".join(valori)))
+    for pref, etich in (("home", "Indirizzo casa"), ("work", "Indirizzo lavoro"), ("other", "Altro indirizzo")):
+        parti = [fld.get(pref + k) for k in ("Street", "PostalCode", "City", "State", "Country")]
+        usati.update(pref + k for k in ("Street", "PostalCode", "City", "State", "Country"))
+        if any(parti):
+            e["campi"].append((etich, ", ".join(str(p) for p in parti if p)))
+    if fld.get("type") == "group" or fld.get("dlist"):
+        e["campi"].append(("Membri del gruppo", str(fld.get("dlist", "")).replace(",", "\n")))
+    for k, v in sorted(fld.items()):       # campi personalizzati o non previsti: si mostrano comunque
+        if k not in usati and v and not k.startswith("zimbra") and isinstance(v, (str, int)):
+            e["campi"].append((k, str(v)))
+    e["descrizione"] = str(fld.get("notes", ""))
+    e["persone"] = ", ".join(str(fld[k]) for chiavi in (_CAMPI_ZIMBRA[0][1],) for k in chiavi if fld.get(k))
+    e["luogo"] = str(fld.get("company", ""))
+    return e
+
+
+def _ics_da_mime(dati):
+    """Parte text/calendar di un messaggio MIME (inviti Zimbra .appt/.task, inviti allegati)."""
+    try:
+        msg = email.message_from_bytes(dati, policy=policy.default)
+        for part in msg.walk():
+            if part.get_content_type() in ("text/calendar", "application/ics"):
+                payload = part.get_payload(decode=True)
+                if payload:
+                    return payload
+    except Exception:
+        pass
+    if b"BEGIN:VCALENDAR" in dati[:200000]:
+        i = dati.find(b"BEGIN:VCALENDAR")
+        return dati[i:]
+    return None
+
+
+def elementi_zimbra_meta(percorso_meta, rel_dir, radice):
+    """Un elemento dell'export Zimbra/Carbonio descritto dal suo .meta. -> (elementi, percorso_contenuto o None)."""
+    try:
+        with open(percorso_meta, "rb") as f:
+            j = json.loads(f.read().decode("utf-8", "replace"))
+    except Exception:
+        return [], None
+    if not isinstance(j, dict) or "type" not in j:
+        return [], None
+    tipo = str(j.get("type", "")).lower()
+    contenuto = percorso_meta[:-5]
+    if not os.path.isfile(contenuto):
+        contenuto = None
+    cartella = _cartella_pim(str(j.get("Path", "") or "").lstrip("/").rsplit("/", 1)[0] if j.get("Path") else rel_dir)
+    meta = {}
+    if j.get("metadata"):
+        try:
+            meta = decodifica_bencode(j["metadata"])
+        except Exception:
+            meta = {}
+    data_el = _da_epoca(j.get("date"))
+    if tipo == "contact":
+        fld = meta.get("fld", {}) if isinstance(meta, dict) else {}
+        if not isinstance(fld, dict) or not fld:
+            return [], contenuto
+        e = _contatto_zimbra(fld, cartella or "Contatti")
+        return [e], contenuto
+    if tipo in ("appointment", "task"):
+        elementi = []
+        if contenuto:
+            try:
+                with open(contenuto, "rb") as f:
+                    ics = _ics_da_mime(f.read())
+                if ics:
+                    elementi = [x for x in elementi_ics(ics, cartella)
+                                if x["tipo"] == ("evento" if tipo == "appointment" else "attivita")] or elementi_ics(ics, cartella)
+            except Exception:
+                elementi = []
+        if not elementi:              # nessuna parte iCalendar: titolo e date dai metadati
+            e = nuovo_elemento("evento" if tipo == "appointment" else "attivita",
+                               j.get("subject") or j.get("name") or "(senza titolo)", cartella=cartella)
+            if isinstance(meta, dict):
+                e["inizio"] = _fmt(_da_epoca(meta.get("aps"))) if meta.get("aps") else _fmt(data_el)
+                e["fine"] = _fmt(_da_epoca(meta.get("ape"))) if meta.get("ape") else ""
+            elementi = [e]
+        for e in elementi:
+            e["cartella"] = e.get("cartella") or cartella
+            if j.get("TagNames"):
+                e["campi"].append(("Etichette", str(j["TagNames"]).replace(":", ", ")))
+        return elementi, contenuto
+    if tipo == "chat":
+        e = nuovo_elemento("chat", j.get("subject") or "Chat", cartella=cartella or "Chat", mime=True)
+        e["inizio"] = _fmt(data_el)
+        e["persone"] = str(j.get("sender", "") or "")
+        return [e], contenuto
+    if tipo in ("note", "wiki"):
+        e = nuovo_elemento("nota", j.get("subject") or j.get("name") or "Nota", cartella=cartella or "Note")
+        e["inizio"] = _fmt(data_el)
+        if contenuto:
+            try:
+                with open(contenuto, "rb") as f:
+                    testo = _leggi_testo(f.read(2_000_000))
+                e["descrizione"] = re.sub(r'<[^>]+>', ' ', testo) if "<" in testo[:200] else testo
+            except OSError:
+                pass
+        return [e], contenuto
+    if tipo == "document" and contenuto:
+        e = nuovo_elemento("file", j.get("name") or os.path.basename(contenuto), cartella=cartella or "Valigetta",
+                           file=True)
+        e["inizio"] = _fmt(data_el)
+        e["campi"] = [("Dimensione", dimensione_leggibile(j.get("size") or os.path.getsize(contenuto)))]
+        if j.get("sender"):
+            e["campi"].append(("Autore", str(j["sender"])))
+        return [e], contenuto
+    return [], contenuto
+
+
+def dimensione_leggibile(n):
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return ""
+    for unita in ("byte", "KB", "MB", "GB"):
+        if n < 1024 or unita == "GB":
+            return f"{n:.0f} {unita}" if unita == "byte" else f"{n:.1f} {unita}"
+        n /= 1024
+
+
+# ---------- Thunderbird: rubrica abook.sqlite e calendario local.sqlite ----------
+def elementi_sqlite_thunderbird(percorso, cartella=""):
+    nome = os.path.basename(percorso).lower()
+    out = []
+    try:
+        conn = sqlite3.connect(f"file:{percorso}?mode=ro", uri=True)
+    except Exception:
+        return []
+    try:
+        tabelle = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if nome.startswith(("abook", "history")) and "properties" in tabelle:
+            schede = {}
+            for card, chiave, valore in conn.execute("SELECT card, name, value FROM properties"):
+                schede.setdefault(card, {})[chiave] = valore
+            rubrica = "Rubrica personale" if nome.startswith("abook") else "Indirizzi raccolti"
+            for p in schede.values():
+                if p.get("_vCard"):
+                    out += [dict(x, cartella=f"Contatti/{rubrica}") for x in elementi_vcf(p["_vCard"])]
+                    continue
+                nome_c = p.get("DisplayName") or " ".join(x for x in (p.get("FirstName"), p.get("LastName")) if x)
+                e = nuovo_elemento("contatto", nome_c or p.get("PrimaryEmail", "") or "(senza nome)",
+                                   cartella=f"Contatti/{rubrica}")
+                for etich, chiavi in (("Email", ("PrimaryEmail", "SecondEmail")), ("Telefono", ("CellularNumber",
+                                      "WorkPhone", "HomePhone")), ("Azienda", ("Company",)), ("Ruolo", ("JobTitle",))):
+                    valori = [p[k] for k in chiavi if p.get(k)]
+                    if valori:
+                        e["campi"].append((etich, "\n".join(valori)))
+                e["descrizione"] = p.get("Notes", "")
+                e["persone"] = ", ".join(p[k] for k in ("PrimaryEmail", "SecondEmail") if p.get(k))
+                out.append(e)
+        elif "cal_events" in tabelle:
+            proprieta = {}
+            if "cal_properties" in tabelle:
+                for item, chiave, valore in conn.execute("SELECT item_id, key, value FROM cal_properties"):
+                    proprieta.setdefault(item, {})[chiave] = valore
+            nomi_cal = {}
+            for riga in conn.execute("SELECT id, title, event_start, event_end, flags FROM cal_events"):
+                item, titolo, inizio, fine, flags = riga
+                e = nuovo_elemento("evento", titolo or "(senza titolo)", cartella="Calendario/Thunderbird")
+                tutto = bool((flags or 0) & 8)
+                e["inizio"] = _fmt(_da_epoca(inizio), tutto)
+                e["fine"] = _fmt(_da_epoca(fine), tutto)
+                pr = proprieta.get(item, {})
+                e["luogo"] = pr.get("LOCATION", "") or ""
+                e["descrizione"] = pr.get("DESCRIPTION", "") or ""
+                out.append(e)
+            if "cal_todos" in tabelle:
+                for item, titolo, scad, completata in conn.execute(
+                        "SELECT id, title, todo_due, todo_completed FROM cal_todos"):
+                    e = nuovo_elemento("attivita", titolo or "(senza titolo)", cartella="Attività/Thunderbird")
+                    e["inizio"] = _fmt(_da_epoca(scad))
+                    e["campi"].append(("Stato", "completata" if completata else "da fare"))
+                    e["descrizione"] = proprieta.get(item, {}).get("DESCRIPTION", "") or ""
+                    out.append(e)
+            del nomi_cal
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return out
+
+
+# ---------- Outlook: elementi non di posta in .pst/.ost e .msg ----------
+_CLASSI_OUTLOOK = {"ipm.appointment": "evento", "ipm.task": "attivita", "ipm.contact": "contatto",
+                   "ipm.distlist": "contatto", "ipm.stickynote": "nota", "ipm.activity": "nota"}
+
+
+def tipo_classe_outlook(classe):
+    c = (classe or "").lower()
+    for prefisso, tipo in _CLASSI_OUTLOOK.items():
+        if c == prefisso or c.startswith(prefisso + "."):
+            return tipo
+    return None
+
+
+def _ics_escape(v):
+    return str(v or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+
+def _ics_dt(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def ics_da_campi(tipo, titolo, inizio=None, fine=None, luogo="", descrizione="", partecipanti=(), completata=None,
+                 uid=""):
+    comp = "VTODO" if tipo == "attivita" else "VJOURNAL" if tipo == "nota" else "VEVENT"
+    righe = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//ZimbraViewer//IT", f"BEGIN:{comp}",
+             f"UID:{uid or hashlib.sha1((titolo + str(inizio)).encode()).hexdigest()}@zimbraviewer",
+             f"SUMMARY:{_ics_escape(titolo)}"]
+    if inizio:
+        righe.append(f"{'DUE' if comp == 'VTODO' else 'DTSTART'}:{_ics_dt(inizio)}")
+    if fine and comp == "VEVENT":
+        righe.append(f"DTEND:{_ics_dt(fine)}")
+    if luogo:
+        righe.append(f"LOCATION:{_ics_escape(luogo)}")
+    if descrizione:
+        righe.append(f"DESCRIPTION:{_ics_escape(descrizione)}")
+    for p in partecipanti:
+        righe.append(f"ATTENDEE;CN={_ics_escape(p)}:mailto:{p if '@' in p else 'nessuno@invalid'}")
+    if completata is not None and comp == "VTODO":
+        righe.append(f"STATUS:{'COMPLETED' if completata else 'NEEDS-ACTION'}")
+    righe += [f"END:{comp}", "END:VCALENDAR", ""]
+    return "\r\n".join(righe).encode("utf-8")
+
+
+def vcf_da_campi(nome, nome_proprio="", cognome="", emails=(), telefoni=(), azienda="", ruolo="", note="",
+                 indirizzi=(), sito=""):
+    esc = lambda v: str(v or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+    righe = ["BEGIN:VCARD", "VERSION:3.0", f"FN:{esc(nome)}", f"N:{esc(cognome)};{esc(nome_proprio)};;;"]
+    righe += [f"EMAIL;TYPE=INTERNET:{esc(x)}" for x in emails if x]
+    righe += [f"TEL;TYPE={t}:{esc(x)}" for t, x in telefoni if x]
+    righe += [f"ADR;TYPE={t}:;;{esc(x)};;;;" for t, x in indirizzi if x]
+    if azienda:
+        righe.append(f"ORG:{esc(azienda)}")
+    if ruolo:
+        righe.append(f"TITLE:{esc(ruolo)}")
+    if sito:
+        righe.append(f"URL:{esc(sito)}")
+    if note:
+        righe.append(f"NOTE:{esc(note)}")
+    righe += ["END:VCARD", ""]
+    return "\r\n".join(righe).encode("utf-8")
+
+
+_RE_EMAIL = re.compile(r'^[^@\s<>"]+@[^@\s<>"]+\.[A-Za-z]{2,}$')
+
+
+def pim_outlook(tipo, prop_str, prop_data, prop_nominate, oggetto, corpo):
+    """File .ics/.vcf per un elemento Outlook. prop_str/prop_data: {id MAPI: valore}; prop_nominate: {LID: valore}
+    delle proprietà con nome (quando note). -> (estensione, byte)."""
+    s = lambda pid: prop_str.get(pid) or ""
+    if tipo == "contatto":
+        emails = [prop_nominate.get(l) for l in (0x8083, 0x8093, 0x80A3)]
+        emails = [x for x in emails if x and _RE_EMAIL.match(str(x))]
+        if not emails:                         # proprietà con nome non mappate (pst): si cercano gli indirizzi
+            emails = list(dict.fromkeys(v for k, v in prop_str.items()
+                                        if k >= 0x8000 and isinstance(v, str) and _RE_EMAIL.match(v.strip())))
+        telefoni = [("CELL", s(0x3A1C)), ("WORK", s(0x3A08)), ("HOME", s(0x3A09)), ("WORK,FAX", s(0x3A24)),
+                    ("OTHER", s(0x3A1F))]
+        ind_lavoro = ", ".join(x for x in (s(0x3A29), s(0x3A2A), s(0x3A27), s(0x3A28), s(0x3A26)) if x)
+        ind_casa = ", ".join(x for x in (s(0x3A5D), s(0x3A5B), s(0x3A59), s(0x3A5C), s(0x3A5A)) if x)
+        nome = s(0x3001) or oggetto or " ".join(x for x in (s(0x3A06), s(0x3A11)) if x) or (emails[0] if emails else "")
+        return ".vcf", vcf_da_campi(nome, s(0x3A06), s(0x3A11), emails, telefoni, s(0x3A16), s(0x3A17), corpo,
+                                    [("WORK", ind_lavoro), ("HOME", ind_casa)], s(0x3A51))
+    inizio = prop_nominate.get(0x820D) or prop_nominate.get(0x8104) or prop_data.get(0x0060)
+    fine = prop_nominate.get(0x820E) or prop_nominate.get(0x8105) or prop_data.get(0x0061)
+    luogo = prop_nominate.get(0x8208) or ""
+    completata = prop_nominate.get(0x811C) if tipo == "attivita" else None
+    if tipo == "attivita" and prop_nominate.get(0x8105):
+        inizio = prop_nominate.get(0x8105)
+    return ".ics", ics_da_campi(tipo, oggetto or "(senza titolo)", inizio, fine, luogo if isinstance(luogo, str) else "",
+                                corpo or "", completata=bool(completata) if completata is not None else None)
+
+
+# ---------- dispatcher: tutti gli elementi di un file ----------
+def e_file_pim(nome):
+    b = nome.lower()
+    return (b.endswith(ESTENSIONI_PIM) and not b.endswith(".eml.meta")) or \
+        (b.endswith(".sqlite") and (b.startswith(("abook", "history")) or b == "local.sqlite"))
+
+
+def elementi_da_file(percorso, radice):
+    """Elementi (eventi, attività, contatti, chat, note, file) contenuti in un file dell'export.
+    Restituisce [(elemento, percorso_relativo_del_contenuto)]."""
+    rel = os.path.relpath(percorso, radice).replace("\\", "/")
+    rel_dir = os.path.dirname(rel)
+    cartella = _cartella_pim(rel_dir)
+    b = percorso.lower()
+    try:
+        if b.endswith(".meta"):
+            elementi, contenuto = elementi_zimbra_meta(percorso, rel_dir, radice)
+            rel_c = os.path.relpath(contenuto, radice).replace("\\", "/") if contenuto else rel
+            return [(e, rel_c) for e in elementi]
+        if b.endswith((".appt", ".task", ".chat")):
+            if os.path.exists(percorso + ".meta"):
+                return []                         # lo descrive già il suo .meta
+            with open(percorso, "rb") as f:
+                dati = f.read()
+            if b.endswith(".chat"):
+                return [(nuovo_elemento("chat", os.path.splitext(os.path.basename(percorso))[0], cartella=cartella or "Chat",
+                                        mime=True), rel)]
+            ics = _ics_da_mime(dati)
+            return [(e, rel) for e in elementi_ics(ics, cartella)] if ics else []
+        if os.path.getsize(percorso) > 200 * 1024 * 1024:
+            return []
+        if b.endswith(".sqlite"):
+            return [(e, rel) for e in elementi_sqlite_thunderbird(percorso, cartella)]
+        with open(percorso, "rb") as f:
+            dati = f.read()
+        if b.endswith((".ics", ".ical", ".icalendar", ".ifb", ".vcs")):
+            return [(e, rel) for e in elementi_ics(dati, cartella or "Calendario")]
+        if b.endswith((".vcf", ".vcard")):
+            return [(e, rel) for e in elementi_vcf(dati, cartella or "Contatti")]
+        if b.endswith(".csv"):
+            return [(e, rel) for e in elementi_csv_contatti(dati, cartella or "Contatti")]
+        if b.endswith(".json"):
+            return [(e, rel) for e in elementi_json(dati, percorso, cartella)]
+    except Exception:
+        return []
+    return []
+
+
+def contiene_pim(cartella, limite=4000):
+    """Vero se la cartella contiene dati non di posta leggibili (calendario, rubrica...). Guarda al massimo
+    'limite' file per non rallentare l'apertura di cartelle enormi."""
+    visti = 0
+    for _r, _d, files in os.walk(cartella):
+        for f in files:
+            visti += 1
+            b = f.lower()
+            if b.endswith((".ics", ".vcf", ".vcard", ".appt.meta", ".task.meta", ".chat")) or b == "tasks.json" or \
+                    (b.startswith("abook") and b.endswith(".sqlite")):
+                return True
+            if visti > limite:
+                return False
+    return False
+
+
+def cerca_file_pim(cartella):
+    """File con dati non di posta da copiare nella cartella di destinazione durante un'importazione."""
+    trovati = []
+    for radice, _dirs, files in os.walk(cartella):
+        for f in files:
+            b = f.lower()
+            p = os.path.join(radice, f)
+            if b.endswith(".json"):
+                if b in ("tasks.json", "messages.json", "group_info.json") or os.path.basename(radice).lower() == "keep":
+                    trovati.append(p)
+            elif b.endswith(".csv"):
+                try:
+                    with open(p, "rb") as fh:
+                        if elementi_csv_contatti(fh.read(65536)):
+                            trovati.append(p)
+                except OSError:
+                    pass
+            elif e_file_pim(f) and not b.endswith(".meta"):
+                trovati.append(p)
+    return trovati
+
+
+# ---------- esportazione degli elementi ----------
+def esporta_elementi(elementi, percorso):
+    """Salva gli elementi scelti: .ics (eventi/attività/note), .vcf (contatti) o .csv (qualsiasi tipo)."""
+    if percorso.lower().endswith(".csv"):
+        with open(percorso, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f, delimiter=";")
+            w.writerow(["Tipo", "Titolo", "Inizio", "Fine", "Luogo", "Persone", "Cartella", "Dettagli", "Descrizione"])
+            for e in elementi:
+                w.writerow([NOMI_TIPI_PIM.get(e["tipo"], e["tipo"]), e.get("titolo", ""), e.get("inizio", ""),
+                            e.get("fine", ""), e.get("luogo", ""), e.get("persone", ""), e.get("cartella", ""),
+                            " | ".join(f"{k}: {str(v).replace(chr(10), ', ')}" for k, v in e.get("campi", [])),
+                            e.get("descrizione", "")])
+        return
+    if percorso.lower().endswith(".vcf"):
+        with open(percorso, "wb") as f:
+            for e in elementi:
+                if e.get("formato_raw") == "vcf" and e.get("raw"):
+                    f.write(e["raw"].encode("utf-8") + b"\r\n")
+                elif e["tipo"] == "contatto":
+                    campi = dict(e.get("campi", []))
+                    f.write(vcf_da_campi(e["titolo"], emails=str(campi.get("Email", "")).split("\n"),
+                                         telefoni=[("VOICE", t) for t in str(campi.get("Telefono", "")).split("\n")],
+                                         azienda=campi.get("Azienda", ""), ruolo=campi.get("Ruolo", ""),
+                                         note=e.get("descrizione", "")))
+        return
+    righe = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//ZimbraViewer//IT"]
+    for e in elementi:
+        if e.get("formato_raw") == "ics" and e.get("raw"):
+            righe.append(e["raw"])
+        elif e["tipo"] in ("evento", "attivita", "nota"):
+            dt = lambda s: datetime.strptime(s, "%Y-%m-%d %H:%M") if len(s) == 16 else (
+                datetime.strptime(s, "%Y-%m-%d") if len(s) == 10 else None)
+            corpo = ics_da_campi(e["tipo"], e["titolo"], dt(e.get("inizio", "")), dt(e.get("fine", "")),
+                                 e.get("luogo", ""), e.get("descrizione", "")).decode("utf-8")
+            interno = corpo.split("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//ZimbraViewer//IT\r\n", 1)[-1]
+            righe.append(interno.rsplit("END:VCALENDAR", 1)[0].rstrip())
+    righe += ["END:VCALENDAR", ""]
+    with open(percorso, "w", encoding="utf-8", newline="") as f:
+        f.write("\r\n".join(righe))
 
 # ==========================================
 # FIRME DIGITALI - MOTORE DEL P7MREADER 3.0 (integrato)
@@ -3957,13 +5242,14 @@ class AttachmentExtractorWorker(QThread):
         self.finished.emit(estratti_totali)       # sempre, anche se annullato: chi ascolta guarda _is_cancelled
 
 class IndexerWorker(QThread):
-    progress = pyqtSignal(int, int) 
+    progress = pyqtSignal(int, int)
     finished = pyqtSignal()
-    
-    def __init__(self, root_dir, db_path):
+
+    def __init__(self, root_dir, db_path, solo_pim=False):
         super().__init__()
         self.root_dir = root_dir
         self.db_path = db_path
+        self.solo_pim = solo_pim             # vecchio indice: si leggono solo calendario, rubrica e altri dati
         self._is_cancelled = False
         # nomi delle cartelle di sistema (Zimbra, Outlook, Thunderbird, Maildir...) in italiano
         self.mappa_traduzioni = {
@@ -3978,24 +5264,31 @@ class IndexerWorker(QThread):
         self._is_cancelled = True
 
     def run(self):
-        eml_files = []
+        eml_files, pim_files = [], []
         for root, dirs, files in os.walk(self.root_dir):
             if self._is_cancelled:
                 self.finished.emit()
                 return
             for file in files:
-                if file.endswith('.eml'): eml_files.append(os.path.join(root, file))
-        
-        totale = len(eml_files)
+                if file.lower().endswith('.eml'):
+                    if not self.solo_pim:
+                        eml_files.append(os.path.join(root, file))
+                elif e_file_pim(file):
+                    pim_files.append(os.path.join(root, file))
+
+        totale = len(eml_files) + len(pim_files)
         if totale == 0 or self._is_cancelled:
             self.finished.emit()
             return
-            
+
         step = max(1, totale // 100)
 
         conn = sqlite3.connect(self.db_path)
         try:
-            self._indicizza(conn, eml_files, totale, step)
+            with conn:
+                if not self.solo_pim:
+                    self._indicizza(conn, eml_files, totale, step)
+                self._indicizza_pim(conn, pim_files, len(eml_files), totale, step)
         except _Annullato:
             pass                                  # la transazione è stata annullata: l'indice precedente resta intatto
         conn.close()
@@ -4003,24 +5296,46 @@ class IndexerWorker(QThread):
             self.progress.emit(totale, totale)
         self.finished.emit()                      # sempre, anche se annullato: chi ascolta guarda _is_cancelled
 
+    def _indicizza_pim(self, conn, pim_files, gia, totale, step):
+        conn.execute("DELETE FROM elementi")
+        for i, path in enumerate(pim_files):
+            if self._is_cancelled:
+                raise _Annullato()
+            for e, rel in elementi_da_file(path, self.root_dir):
+                extra = ""
+                campi = dict(e.get("campi", []))
+                if e["tipo"] == "attivita":
+                    extra = campi.get("Stato", "")
+                elif e["tipo"] == "file":
+                    extra = campi.get("Dimensione", "")
+                elif e["tipo"] == "chat":
+                    extra = campi.get("Messaggi", "")
+                conn.execute("INSERT INTO elementi (tipo, cartella, titolo, inizio, fine, luogo, persone, extra, testo, "
+                             "file_path, dati) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             (e["tipo"], e.get("cartella") or NOMI_TIPI_PIM.get(e["tipo"], ""), e["titolo"],
+                              e.get("inizio", ""), e.get("fine", ""), e.get("luogo", ""), e.get("persone", ""), extra,
+                              _testo_ricerca(e), rel, json.dumps(e, ensure_ascii=False, default=str)))
+            if (gia + i) % step == 0:
+                self.progress.emit(gia + i, totale)
+
     def _indicizza(self, conn, eml_files, totale, step):
-        with conn:
+        if True:
             conn.execute("DELETE FROM emails")
             conn.execute("DELETE FROM allegati")
-            
+
             for i, path in enumerate(eml_files):
                 if self._is_cancelled:
                     raise _Annullato()
-                
+
                 rel_path = os.path.relpath(path, self.root_dir).replace('\\', '/')
-                cartella_grezza = os.path.dirname(rel_path) 
-                
-                if not cartella_grezza: 
+                cartella_grezza = os.path.dirname(rel_path)
+
+                if not cartella_grezza:
                     cartella_finale = "Root"
                 else:
                     parti_cartella = cartella_grezza.split('/')
                     parti_pulite = []
-                    
+
                     for index, parte in enumerate(parti_cartella):
                         parte_pulita = re.sub(r'!\d+$', '', parte)
                         if index == 0:
@@ -4029,22 +5344,22 @@ class IndexerWorker(QThread):
                             parti_pulite.append(parte_tradotta)
                         else:
                             parti_pulite.append(parte_pulita)
-                            
+
                     cartella_finale = "/".join(parti_pulite)
-                
+
                 try:
                     with open(path, 'rb') as f:
                         msg = email.message_from_binary_file(f, policy=policy.default)
-                    
+
                     mittente = str(msg.get('From', ''))
                     destinatario = str(msg.get('To', ''))
                     oggetto = str(msg.get('Subject', '(Nessun oggetto)'))
-                    
+
                     # testo di tutte le parti testuali, compreso il messaggio originale dentro postacert.eml (PEC)
                     corpo_testo = "\n".join(testo_parte(part) for part in msg.walk()
                                             if part.get_content_type() == "text/plain"
                                             and str(part.get_content_disposition()) != 'attachment')[:300000]
-                    
+
                     data_formattata = data_da_msg(msg)
                     cursor = conn.cursor()
                     cursor.execute("""
@@ -4052,7 +5367,7 @@ class IndexerWorker(QThread):
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (cartella_finale, mittente, destinatario, oggetto, data_formattata, rel_path, corpo_testo))  # percorso RELATIVO
                     email_id = cursor.lastrowid
-                    
+
                     for nome_allegato, _part in allegati_da_msg(msg):
                         cursor.execute("INSERT INTO allegati (email_id, nome_file) VALUES (?, ?)", (email_id, nome_allegato))
                 except Exception:
@@ -4474,6 +5789,18 @@ class DatabaseManager:
                 )
             """)
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ricerca ON emails(mittente, oggetto, cartella, data)")
+            nuova = not self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='elementi'").fetchone()
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS elementi (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tipo TEXT, cartella TEXT, titolo TEXT, inizio TEXT, fine TEXT, luogo TEXT, persone TEXT,
+                    extra TEXT, testo TEXT, file_path TEXT, dati TEXT
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_elementi ON elementi(tipo, cartella, inizio)")
+            # indice creato da una versione precedente (solo posta): calendario, rubrica... vanno ancora letti
+            self.serve_indice_pim = nuova and bool(self.conn.execute("SELECT 1 FROM emails LIMIT 1").fetchone())
 
 # ==========================================
 # WIDGET CONDIVISI: AVANZAMENTO, ZONA DI RILASCIO, BENVENUTO, ANTEPRIMA
@@ -4523,6 +5850,7 @@ class PannelloAvanzamento(QObject):
         self.barra = QProgressBar()
         self.barra.setRange(0, 100)
         self.barra.setFormat("%p%")
+        self.barra.setAccessibleName(titolo)
         pulsanti = QHBoxLayout()
         self.btn_riduci = pulsante("Riduci e continua a lavorare", "riduci",
                                    suggerimento="Nasconde questa finestra: l'avanzamento resta visibile in basso nella finestra principale")
@@ -4551,6 +5879,7 @@ class PannelloAvanzamento(QObject):
         self.barra_chip.setRange(0, 100)
         self.barra_chip.setFormat("%p%")
         self.barra_chip.setFixedWidth(150)
+        self.barra_chip.setAccessibleName(etichetta_breve)
         btn_mostra = pulsante("Mostra", ruolo="piccolo", suggerimento="Riapre la finestra di avanzamento")
         btn_mostra.clicked.connect(self.mostra)
         self.btn_annulla_chip = pulsante("", "chiudi", "piccolo fantasma", "Annulla l'operazione", C["error"])
@@ -4581,6 +5910,7 @@ class PannelloAvanzamento(QObject):
         if not self._annullato:
             self.lbl.setText(testo)
             self.chip.setToolTip(testo)
+            self.barra.setAccessibleDescription(testo)
 
     def riduci(self):
         self.dialogo.hide()
@@ -4633,6 +5963,8 @@ class CustomWebEngineView(QWebEngineView):
         self.setPage(SafeWebEnginePage(self))
         self.page().setBackgroundColor(QColor("#FFFFFF"))   # l'area di lettura resta chiara anche con il tema scuro
         self.setAcceptDrops(False)       # i file trascinati li gestisce la finestra principale, non l'anteprima
+        self.setAccessibleName("Anteprima")
+        self.setZoomFactor(ACCESSIBILITA["scala"])
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -4658,7 +5990,10 @@ class _Animato(QWidget):
         self.update()
 
     def showEvent(self, e):
-        self._timer_anim.start()
+        # WCAG 2.2.2: il movimento si ferma da solo dopo 5 secondi; con «Riduci le animazioni» non parte proprio
+        if not ACCESSIBILITA["animazioni_ridotte"]:
+            self._timer_anim.start()
+            QTimer.singleShot(5000, self._timer_anim.stop)
         super().showEvent(e)
 
     def hideEvent(self, e):
@@ -4763,36 +6098,37 @@ class CartaFonte(QFrame):
         lay.addWidget(b, 0, Qt.AlignmentFlag.AlignLeft)
 
 FONTI_POSTA = [
-    ("archivio", "Zimbra", "File .tgz (oppure la cartella già estratta)",
-     ["Nella webmail Zimbra apri Preferenze → Importa/Esporta.",
-      "In «Esporta» scegli l'account e premi Esporta: si scarica un file .tgz.",
+    ("archivio", "Zimbra / Carbonio", "File .tgz: posta, rubrica, calendario, attività, chat, Valigetta",
+     ["Zimbra: Preferenze → Importa/Esporta → «Esporta», tipo «Account», tutti i tipi di dati.",
+      "Carbonio: chiedi all'amministratore l'export .tgz della casella (REST «fmt=tgz»); i .ics e .vcf "
+      "scaricati dalla webmail vanno bene lo stesso.",
       "Trascina qui il file .tgz così com'è: lo estraggo io."],
-     "Export Zimbra (*.tgz *.tar.gz *.tar *.zip)"),
-    ("nuvola", "Gmail / Google", "File .mbox di Google Takeout (anche lo .zip)",
+     "Export Zimbra / Carbonio (*.tgz *.tar.gz *.tar *.zip *.ics *.vcf)"),
+    ("nuvola", "Gmail / Google", "Google Takeout: Posta, Calendar, Contatti, Tasks, Keep, Chat",
      ["Vai su takeout.google.com e premi «Deseleziona tutto».",
-      "Seleziona solo «Posta» e crea l'esportazione.",
+      "Seleziona Posta, Calendar, Contatti, Tasks, Keep e Google Chat e crea l'esportazione.",
       "Scarica lo .zip che ti arriva via mail e trascinalo qui: non serve estrarlo."],
-     "Google Takeout (*.zip *.mbox)"),
-    ("documento", "Outlook", "File .pst / .ost, oppure singole mail .msg",
+     "Google Takeout (*.zip *.mbox *.ics *.vcf *.csv)"),
+    ("documento", "Microsoft Outlook", "File .pst / .ost (posta, calendario, contatti, attività), .msg",
      ["In Outlook (classico): File → Apri ed esporta → Importa/Esporta.",
-      "Scegli «Esporta in un file» → «File di dati di Outlook (.pst)» e la casella.",
-      "Trascina qui il file .pst. Le singole mail .msg si aprono subito."],
-     "Outlook (*.pst *.ost *.msg)"),
-    ("lettere", "Thunderbird", "La cartella del profilo con la posta",
+      "Scegli «Esporta in un file» → «File di dati di Outlook (.pst)» e la casella con le sottocartelle.",
+      "Trascina qui il file .pst. Anche i contatti in .csv e i calendari in .ics."],
+     "Outlook (*.pst *.ost *.msg *.csv *.ics *.vcf)"),
+    ("lettere", "Thunderbird", "La cartella del profilo: posta, rubrica e calendario",
      ["Menu ≡ → Aiuto → Informazioni per la risoluzione dei problemi.",
       "Alla voce «Cartella del profilo» premi «Apri cartella».",
-      "Trascina qui la cartella «Mail» (o «ImapMail») che trovi dentro."],
+      "Trascina qui l'intera cartella del profilo (o solo «Mail» / «ImapMail»)."],
      "cartella"),
-    ("busta", "Apple Mail", "Caselle esportate (cartelle .mbox)",
-     ["In Mail seleziona la casella da salvare.",
-      "Menu Casella → Esporta casella… e scegli dove salvarla.",
-      "Trascina qui la cartella .mbox creata (anche più caselle insieme)."],
+    ("busta", "Apple / iCloud", "Mail (.mbox), Calendario (.ics), Contatti (.vcf)",
+     ["Mail: Casella → Esporta casella…; Calendario: File → Esporta.",
+      "Contatti: seleziona tutto e File → Esporta → vCard.",
+      "Metti tutto in una cartella e trascinala qui (anche più caselle insieme)."],
      "cartella"),
-    ("pacco", "Altri programmi", "mbox, Maildir, .eml, .emlx, archivi .zip/.tar",
-     ["Quasi tutti i programmi esportano in mbox o in file .eml.",
+    ("pacco", "Altri programmi", "mbox, Maildir, .eml, .emlx, .ics, .vcf, archivi .zip/.tar",
+     ["Quasi tutti i programmi esportano la posta in mbox o .eml, l'agenda in .ics e la rubrica in .vcf.",
       "Trascina qui il file o la cartella: il formato lo riconosco da solo.",
       "Una singola mail (.eml, .msg) si apre subito in una scheda."],
-     "Posta (*.mbox *.eml *.emlx *.msg *.zip *.tgz *.tar *.tar.gz *.pst *.ost)"),
+     "Posta e dati (*.mbox *.eml *.emlx *.msg *.zip *.tgz *.tar *.tar.gz *.pst *.ost *.ics *.vcf *.csv)"),
 ]
 
 class SchermataBenvenuto(QScrollArea):
@@ -4897,7 +6233,7 @@ class SchermataBenvenuto(QScrollArea):
 
     def showEvent(self, e):
         super().showEvent(e)
-        if not self._animato:            # al primo ingresso le schede compaiono una dopo l'altra
+        if not self._animato and not ACCESSIBILITA["animazioni_ridotte"]:   # le schede compaiono una dopo l'altra
             self._animato = True
             self._animazioni = []
             for i, carta in enumerate(self.carte):
@@ -4979,6 +6315,150 @@ class Suggerimento(QFrame):
 def impostazioni():
     return QSettings("ZimbraViewer", "ZimbraViewer")
 
+def annuncia(widget, testo):
+    """Messaggio di stato per i lettori di schermo (WCAG 4.1.3): il nome accessibile del widget cambia e Qt
+    lo notifica alle tecnologie assistive; resta visibile anche come suggerimento."""
+    try:
+        widget.setAccessibleName(testo)
+        widget.setAccessibleDescription(testo)
+        widget.setToolTip(testo)
+    except RuntimeError:
+        pass
+
+
+def tasti_tabella(tabella, colonna_spunta, apri):
+    """Tastiera nelle tabelle: Spazio spunta la riga corrente, Invio la apre (WCAG 2.1.1)."""
+    def spunta():
+        r = tabella.currentRow()
+        item = tabella.item(r, colonna_spunta) if r >= 0 and colonna_spunta is not None else None
+        if item is not None and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+            item.setCheckState(Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked
+                               else Qt.CheckState.Checked)
+    for seq, funzione in (("Return", apri), ("Enter", apri), ("Space", spunta)):
+        if funzione is spunta and colonna_spunta is None:
+            continue
+        sc = QShortcut(QKeySequence(seq), tabella)
+        sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        sc.activated.connect(funzione)
+
+
+def preferenza_sistema(nome):
+    """Preferenze di accessibilità del sistema operativo (Qt 6.10+): alto contrasto e movimento ridotto."""
+    try:
+        hints = QApplication.styleHints().accessibility()
+        if nome == "contrasto":
+            return hints.contrastPreference() == Qt.ContrastPreference.HighContrast
+        return hints.motionPreference() == Qt.MotionPreference.ReducedMotion
+    except Exception:
+        return False
+
+
+def _impostazione_bool(chiave):
+    """True / False se l'utente l'ha scelto, None se segue il sistema."""
+    v = impostazioni().value(chiave, None)
+    if v in (None, ""):
+        return None
+    return v if isinstance(v, bool) else str(v).lower() in ("true", "1", "yes")
+
+
+def carica_accessibilita():
+    try:
+        ACCESSIBILITA["scala"] = min(2.0, max(0.8, float(impostazioni().value("accessibilita/scala", 1.0))))
+    except (TypeError, ValueError):
+        ACCESSIBILITA["scala"] = 1.0
+    for chiave, pref in (("alto_contrasto", "contrasto"), ("animazioni_ridotte", "movimento")):
+        scelta = _impostazione_bool(f"accessibilita/{chiave}")
+        ACCESSIBILITA[chiave] = preferenza_sistema(pref) if scelta is None else scelta
+
+
+def applica_stile(app):
+    """Foglio di stile alla scala del testo scelta, più la crocetta delle schede fuori da Windows; zoom delle anteprime."""
+    stile = costruisci_stile(ACCESSIBILITA["scala"])
+    if not IS_WIN:
+        # Fusion senza tema di icone mostra una "X" rossa sulle schede: la si sostituisce con una crocetta del tema
+        try:
+            croce = os.path.join(cartella_temp_allegati(), "chiudi_scheda.svg")
+            with open(croce, "w", encoding="utf-8") as f:
+                f.write(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" '
+                        f'stroke="{C["attenuato"]}" stroke-width="1.6" stroke-linecap="round"/></svg>')
+            stile += (f"\nQTabBar::close-button {{ image: url({croce.replace(os.sep, '/')}); subcontrol-position: right; "
+                      f"border-radius: 4px; margin: 2px; }}\nQTabBar::close-button:hover {{ background: {C['hover']}; }}\n")
+        except Exception:
+            pass
+    app.setStyleSheet(stile)
+    for w in app.allWidgets():
+        if isinstance(w, CustomWebEngineView):
+            w.setZoomFactor(ACCESSIBILITA["scala"])
+
+
+def costruisci_html_elemento(e):
+    """Pagina dell'anteprima per un elemento non di posta: intestazione con i campi, descrizione, conversazione."""
+    es = html.escape
+    tipo = e.get("tipo", "")
+    nome_tipo = {"evento": "Evento", "attivita": "Attività", "contatto": "Contatto", "chat": "Conversazione",
+                 "nota": "Nota", "file": "File"}.get(tipo, "Elemento")
+    righe = []
+    if tipo == "evento":
+        quando = e.get("inizio", "")
+        if e.get("fine") and e.get("fine") != e.get("inizio"):
+            quando += f" → {e['fine']}"
+        righe.append(("Quando", quando + (" (tutto il giorno)" if e.get("tutto_giorno") else "")))
+        righe.append(("Luogo", e.get("luogo", "")))
+    elif tipo == "nota" and e.get("inizio"):
+        righe.append(("Modificata", e["inizio"]))
+    elif tipo == "chat" and e.get("inizio"):
+        righe.append(("Periodo", e["inizio"] + (f" → {e['fine']}" if e.get("fine") and e["fine"] != e["inizio"] else "")))
+    elif tipo == "file" and e.get("inizio"):
+        righe.append(("Data", e["inizio"]))
+    righe += [(k, v) for k, v in e.get("campi", []) if not (tipo == "attivita" and k == "Inizio" and False)]
+    righe.append(("Cartella", e.get("cartella", "")))
+    tabella = "".join(
+        f"<tr><th scope='row' style='width:130px;text-align:left;color:{P['tenue']};font-weight:600;padding:3px 12px 3px 0;"
+        f"vertical-align:top'>{es(k)}</th><td style='padding:3px 0;color:{P['testo']};white-space:pre-wrap'>{es(str(v))}</td></tr>"
+        for k, v in righe if v)
+    foto = ""
+    if e.get("foto", "").startswith("data:image"):
+        foto = (f"<img src='{es(e['foto'])}' alt='Foto di {es(e.get('titolo', ''))}' "
+                f"style='float:right;width:84px;height:84px;object-fit:cover;border-radius:42px;margin:0 0 8px 12px'>")
+    testa = (f"<header style=\"background:{P['foglio']};border:1px solid {P['bordo']};border-left:4px solid {P['accento']};"
+             f"border-radius:10px;padding:16px 18px;margin:0 0 22px 0\">{foto}"
+             f"<p style='margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;"
+             f"color:{P['accento_testo']}'>{es(nome_tipo)}</p>"
+             f"<h1 style='font-size:19px;font-weight:700;margin:0 0 10px;color:#141625'>{es(e.get('titolo', ''))}</h1>"
+             f"<table style='font-size:13px;border-collapse:collapse'>{tabella}</table></header>")
+    corpo = ""
+    if e.get("descrizione"):
+        corpo += (f"<section aria-label='Descrizione' style='font-size:14px;line-height:1.55;white-space:pre-wrap'>"
+                  f"{es(e['descrizione'])}</section>")
+    if e.get("messaggi"):
+        voci = []
+        precedente = None
+        for m in e["messaggi"]:
+            autore = m.get("autore", "")
+            testa_m = "" if autore == precedente else (
+                f"<p style='margin:12px 0 2px;font-weight:700;color:{P['testo']}'>{es(autore)} "
+                f"<span style='font-weight:400;color:{P['tenue']};font-size:12px'>{es(m.get('data', ''))}</span></p>")
+            precedente = autore
+            voci.append(f"<li style='list-style:none;margin:0'>{testa_m}<p style='margin:0 0 4px;padding:6px 10px;"
+                        f"background:{P['fondo_blocco']};border-radius:8px;white-space:pre-wrap'>{es(m.get('testo', ''))}</p></li>")
+        corpo += f"<ol aria-label='Messaggi' style='padding:0;margin:0;font-size:14px;line-height:1.45'>{''.join(voci)}</ol>"
+    return (f"<!doctype html><html lang='it'><head><meta charset='utf-8'><title>{es(e.get('titolo', ''))}</title>"
+            f"{STILE_BASE_PAGINA}</head><body style=\"margin:0;padding:22px;background:{P['foglio']};color:{P['testo']};"
+            f"font-family:{FONT_PAGINA}\"><main>{testa}{corpo}</main></body></html>")
+
+
+# Colonne della tabella per ogni tipo di elemento: (intestazione, campo della riga). Intestazione vuota = colonna nascosta
+COLONNE_ELEMENTI = {
+    "evento": [("Titolo", "titolo"), ("Inizio", "inizio"), ("Fine", "fine"), ("Luogo", "luogo")],
+    "attivita": [("Titolo", "titolo"), ("Scadenza", "inizio"), ("Stato", "extra"), ("", "luogo")],
+    "contatto": [("Nome", "titolo"), ("Email e telefoni", "persone"), ("Azienda", "luogo"), ("", "fine")],
+    "chat": [("Conversazione", "titolo"), ("Inizio", "inizio"), ("Ultimo messaggio", "fine"), ("Partecipanti", "persone")],
+    "nota": [("Titolo", "titolo"), ("Modificata", "inizio"), ("", "fine"), ("", "luogo")],
+    "file": [("Nome", "titolo"), ("Data", "inizio"), ("Dimensione", "extra"), ("", "luogo")],
+}
+SQL_ELEMENTI = "SELECT id, titolo, inizio, fine, luogo, persone, extra, cartella FROM elementi"
+_CAMPI_RIGA = {"titolo": 1, "inizio": 2, "fine": 3, "luogo": 4, "persone": 5, "extra": 6}
+
 # ==========================================
 # SCHEDA DELLA POSTA (export indicizzato oppure singola mail)
 # ==========================================
@@ -5002,6 +6482,10 @@ class MailViewerTab(QWidget):
         self.pannello_att = None
         self._indice_nuovo = False
         self._stampa_in_corso = False
+        self.sezione = "posta"                 # posta | evento | attivita | contatto | chat | nota | file
+        self._elemento_corrente = None
+        self._anteprima_pronta = False
+        self._ricerca_attiva = False
 
         self.layout_principale = QVBoxLayout(self)
         self.layout_principale.setContentsMargins(12, 12, 12, 12)
@@ -5063,6 +6547,8 @@ class MailViewerTab(QWidget):
         self.barra_ricerca.setClearButtonEnabled(True)
         self.barra_ricerca.setAcceptDrops(False)
         self.barra_ricerca.setEnabled(False)
+        self.barra_ricerca.setAccessibleName("Cerca nella posta")
+        self.barra_ricerca.setAccessibleDescription("Scrivi e premi Invio. Ctrl+F porta qui da qualunque punto")
         self.barra_ricerca.returnPressed.connect(self.avvia_ricerca)          # solo con Invio: è più veloce
         self.barra_ricerca.textChanged.connect(self.ricerca_testo_cambiato)
         self.barra_ricerca.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -5073,7 +6559,7 @@ class MailViewerTab(QWidget):
         self.btn_esporta = pulsante("Esporta PDF + allegati", "esporta", "primario",
                                     "Esporta le mail spuntate: una cartella per ogni mail con il PDF, gli allegati\n"
                                     "(i .p7m estratti e verificati), le buste PEC scompattate e i dettagli.")
-        self.btn_esporta.clicked.connect(self.esporta_mail_massivo)
+        self.btn_esporta.clicked.connect(self._esporta_secondo_sezione)
         self.btn_esporta.setEnabled(False)
         self.btn_altro = pulsante("Altro", "tabella", suggerimento="Altre azioni sull'elenco")
         menu = QMenu(self)
@@ -5092,17 +6578,43 @@ class MailViewerTab(QWidget):
         self.layout_principale.addLayout(barra, 0)
         self.layout_principale.addWidget(Suggerimento(
             "scheda_posta",
-            "<b>Come si usa:</b> scegli una cartella a sinistra (vedi anche le mail delle sue sottocartelle) "
+            "<b>Come si usa:</b> a sinistra scegli la sezione (posta, calendario, contatti, attività, chat, note, file) "
+            "e la cartella (vedi anche il contenuto delle sottocartelle) "
             "o cerca (scrivi e premi <b>Invio</b>). "
             "Per esportare, <b>spunta le mail</b> con la casella accanto al mittente e premi <b>Esporta PDF + allegati</b>. "
             "Doppio clic su una mail per aprirla in una scheda tutta sua."))
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        sinistra = QWidget()
+        ls = QVBoxLayout(sinistra)
+        ls.setContentsMargins(0, 0, 0, 0)
+        ls.setSpacing(6)
+        self.lbl_sezioni = QLabel("SEZIONI")
+        self.lbl_sezioni.setObjectName("etichetta")
+        self.lista_sezioni = QListWidget()
+        self.lista_sezioni.setAccessibleName("Sezioni dell'export")
+        self.lista_sezioni.setAccessibleDescription("Posta, calendario, attività, contatti, chat, note e file contenuti nell'export")
+        self.lista_sezioni.setIconSize(QSize(16, 16))
+        self.lista_sezioni.currentRowChanged.connect(self._sezione_scelta)
+        self.lbl_sezioni.setBuddy(self.lista_sezioni)
+        self.lbl_cartelle = QLabel("CARTELLE")
+        self.lbl_cartelle.setObjectName("etichetta")
         self.albero_cartelle = QTreeWidget()
         self.albero_cartelle.setHeaderHidden(True)
         self.albero_cartelle.setIndentation(14)
-        self.albero_cartelle.itemClicked.connect(self.carica_mail_per_cartella)
-        main_splitter.addWidget(self.albero_cartelle)
+        self.albero_cartelle.setAccessibleName("Cartelle")
+        self.albero_cartelle.setAccessibleDescription("Scegli una cartella con le frecce: l'elenco a destra si aggiorna")
+        # frecce, Invio e clic: l'elenco segue la cartella corrente (prima bastava solo il clic del mouse)
+        self.albero_cartelle.currentItemChanged.connect(lambda cur, _prec: cur is not None and self.carica_mail_per_cartella(cur, 0))
+        self.albero_cartelle.itemClicked.connect(self._cartella_cliccata)
+        self.lbl_cartelle.setBuddy(self.albero_cartelle)
+        for w in (self.lbl_sezioni, self.lista_sezioni):
+            w.hide()                          # compaiono solo se l'export contiene anche altri dati
+        ls.addWidget(self.lbl_sezioni)
+        ls.addWidget(self.lista_sezioni)
+        ls.addWidget(self.lbl_cartelle)
+        ls.addWidget(self.albero_cartelle, 1)
+        main_splitter.addWidget(sinistra)
 
         self.content_splitter = QSplitter(Qt.Orientation.Vertical)
         self.tabella_mail = QTableWidget(0, 6)
@@ -5116,6 +6628,7 @@ class MailViewerTab(QWidget):
         header.setHighlightSections(False)
         self.tabella_mail.horizontalHeaderItem(5).setIcon(icona("graffetta", C["tenue"], 14))
         self.tabella_mail.horizontalHeaderItem(5).setToolTip("Allegati")
+        self.tabella_mail.horizontalHeaderItem(5).setData(Qt.ItemDataRole.AccessibleTextRole, "Allegati")
         self.tabella_mail.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tabella_mail.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tabella_mail.itemSelectionChanged.connect(self.mostra_anteprima_mail_da_tabella)
@@ -5129,7 +6642,36 @@ class MailViewerTab(QWidget):
         self.tabella_mail.verticalHeader().setDefaultSectionSize(34)
         self.tabella_mail.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tabella_mail.customContextMenuRequested.connect(self.menu_contestuale_tabella)
-        self.content_splitter.addWidget(self.tabella_mail)
+        self.tabella_mail.setAccessibleName("Elenco delle mail")
+        self.tabella_mail.setAccessibleDescription("Spazio spunta la mail, Invio la apre in una nuova scheda, "
+                                                   "tasto Menu o Maiusc+F10 per le altre azioni")
+        self.tabella_elementi = QTableWidget(0, 6)
+        self.tabella_elementi.setColumnHidden(0, True)
+        he = self.tabella_elementi.horizontalHeader()
+        for col, larghezza in ((2, 150), (3, 150), (4, 220), (5, 160)):
+            he.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+            self.tabella_elementi.setColumnWidth(col, larghezza)
+        he.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        he.setHighlightSections(False)
+        self.tabella_elementi.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tabella_elementi.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tabella_elementi.setShowGrid(False)
+        self.tabella_elementi.setAlternatingRowColors(True)
+        self.tabella_elementi.setWordWrap(False)
+        self.tabella_elementi.verticalHeader().setVisible(False)
+        self.tabella_elementi.verticalHeader().setDefaultSectionSize(34)
+        self.tabella_elementi.itemSelectionChanged.connect(self.mostra_elemento_da_tabella)
+        self.tabella_elementi.cellDoubleClicked.connect(lambda *_: self.apri_file_elemento())
+        self.tabella_elementi.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tabella_elementi.customContextMenuRequested.connect(self.menu_contestuale_elementi)
+        self.pila_elenchi = QStackedWidget()
+        self.pila_elenchi.addWidget(self.tabella_mail)
+        self.pila_elenchi.addWidget(self.tabella_elementi)
+        self.content_splitter.addWidget(self.pila_elenchi)
+        self.tabella_elementi.setAccessibleName("Elenco degli elementi")
+        self.tabella_elementi.setAccessibleDescription("Spazio spunta l'elemento, tasto Menu o Maiusc+F10 per le azioni")
+        tasti_tabella(self.tabella_mail, 2, lambda: self.apri_mail_in_scheda(self.tabella_mail.currentRow()))
+        tasti_tabella(self.tabella_elementi, 1, self.apri_file_elemento)
         self.costruisci_area_preview(self.content_splitter)
         self.content_splitter.setStretchFactor(0, 1)
         self.content_splitter.setStretchFactor(1, 1)
@@ -5157,11 +6699,20 @@ class MailViewerTab(QWidget):
                                          suggerimento="Crea una cartella con PDF, allegati (p7m estratti e verificati), buste PEC scompattate e dettagli")
         self.btn_esporta_mail.setEnabled(False)
         self.btn_esporta_mail.clicked.connect(self.esporta_mail_corrente)
+        self.btn_apri_file = pulsante("Apri il file", "apri", suggerimento="Apre il file con il programma predefinito")
+        self.btn_apri_file.clicked.connect(self.apri_file_elemento)
+        self.btn_salva_file = pulsante("Salva una copia…", "scarica", suggerimento="Salva una copia del file dove vuoi")
+        self.btn_salva_file.clicked.connect(self.salva_file_elemento)
+        for b in (self.btn_apri_file, self.btn_salva_file):
+            b.hide()
         toolbar.addWidget(self.btn_pdf)
         toolbar.addWidget(self.btn_esporta_mail)
+        toolbar.addWidget(self.btn_apri_file)
+        toolbar.addWidget(self.btn_salva_file)
         toolbar.addStretch()
         preview_layout.addLayout(toolbar)
         self.preview_mail = CustomWebEngineView()
+        self.preview_mail.setAccessibleName("Anteprima della mail" if self.mode == "eml" else "Anteprima")
         self.preview_mail.page().pdfPrintingFinished.connect(self.pdf_completato)
         self.preview_mail.setHtml(html_avviso("Nessuna mail selezionata",
                                               "Scegli una mail dall'elenco per leggerla qui." if self.mode == "export" else "Caricamento…"))
@@ -5220,7 +6771,9 @@ class MailViewerTab(QWidget):
                 self.preview_mail.setHtml(html_avviso("Indice non disponibile", "Vedi il messaggio di errore.", "documento", C["error"]))
                 return
             self._abilita_ricerca(True)
-            self.aggiorna_lista_cartelle()
+            self.aggiorna_sezioni()
+            if getattr(self.db, "serve_indice_pim", False) and contiene_pim(self.path):
+                self.avvia_indicizzazione(solo_pim=True)      # indice di una versione precedente: si aggiungono agenda, rubrica...
         else:
             # Prima apertura: si indicizza subito, senza domande (l'utente può ridurre o annullare)
             self.avvia_indicizzazione()
@@ -5230,7 +6783,7 @@ class MailViewerTab(QWidget):
         self.btn_esporta.setEnabled(attiva)
         self.azione_indicizza.setEnabled(attiva)
 
-    def avvia_indicizzazione(self):
+    def avvia_indicizzazione(self, solo_pim=False):
         if self.worker is not None and self.worker.isRunning():
             return
         if not self.db:
@@ -5240,10 +6793,12 @@ class MailViewerTab(QWidget):
                 self.preview_mail.setHtml(html_avviso("Indice non disponibile", "Vedi il messaggio di errore.", "documento", C["error"]))
                 return
         self._abilita_ricerca(False)
-        self.pannello_idx = PannelloAvanzamento(self._finestra(), "Preparo l'elenco delle mail",
+        self.pannello_idx = PannelloAvanzamento(self._finestra(), "Preparo l'elenco" if not solo_pim else
+                                                "Leggo calendario, contatti e altri dati",
                                                 f"Indicizzazione {os.path.basename(self.path)}", self, "aggiorna")
-        self.pannello_idx.aggiorna(0, "Leggo le mail e creo l'indice per la ricerca: si fa una volta sola.")
-        self.worker = IndexerWorker(self.path, self.db.db_path)
+        self.pannello_idx.aggiorna(0, "Leggo mail, calendario, contatti, attività, chat e note e creo l'indice per la "
+                                      "ricerca: si fa una volta sola.")
+        self.worker = IndexerWorker(self.path, self.db.db_path, solo_pim=solo_pim)
         self.worker.progress.connect(self.aggiorna_progress_idx)
         self.worker.finished.connect(self.indicizzazione_completata)
         self.pannello_idx.annulla.connect(self.worker.cancel)
@@ -5252,7 +6807,7 @@ class MailViewerTab(QWidget):
 
     def aggiorna_progress_idx(self, attuale, totale):
         if self.pannello_idx is not None:
-            self.pannello_idx.aggiorna(attuale * 100 // max(1, totale), f"Mail lette: {attuale} di {totale}\n"
+            self.pannello_idx.aggiorna(attuale * 100 // max(1, totale), f"Elementi letti: {attuale} di {totale}\n"
                                        "Puoi ridurre questa finestra: l'elenco compare appena ho finito.")
 
     def indicizzazione_completata(self):
@@ -5276,13 +6831,84 @@ class MailViewerTab(QWidget):
             return
         self._indice_nuovo = False
         self._abilita_ricerca(True)
-        self.aggiorna_lista_cartelle()            # anche se annullata: l'indice precedente è rimasto intatto
+        if self.db is not None:
+            self.db.serve_indice_pim = False
+        self.aggiorna_sezioni()                   # anche se annullata: l'indice precedente è rimasto intatto
+
+    def aggiorna_sezioni(self):
+        """Sezioni presenti nell'export (Posta, Calendario, Contatti...) con il numero di elementi."""
+        if not self.db:
+            return
+        n_mail = self.db.conn.execute("SELECT COUNT(*) FROM emails").fetchone()[0]
+        conta = dict(self.db.conn.execute("SELECT tipo, COUNT(*) FROM elementi GROUP BY tipo").fetchall())
+        voci = [("posta", "Posta", "busta", n_mail)] + [(t, n, ic, conta[t]) for t, n, ic in TIPI_PIM if conta.get(t)]
+        self.lista_sezioni.blockSignals(True)
+        self.lista_sezioni.clear()
+        riga_corrente = 0
+        for i, (tipo, nome, ic, n) in enumerate(voci):
+            voce = QListWidgetItem(icona(ic, C["accento"], 16), f"{nome}  ({n})")
+            voce.setData(Qt.ItemDataRole.UserRole, tipo)
+            voce.setData(Qt.ItemDataRole.AccessibleTextRole, f"{nome}, {n} elementi")
+            self.lista_sezioni.addItem(voce)
+            if tipo == self.sezione:
+                riga_corrente = i
+        self.lista_sezioni.setFixedHeight(min(8, len(voci)) * 30 + 8)
+        self.lista_sezioni.blockSignals(False)
+        mostra = len(voci) > 1
+        self.lbl_sezioni.setVisible(mostra)
+        self.lista_sezioni.setVisible(mostra)
+        if n_mail == 0 and len(voci) > 1 and self.sezione == "posta":
+            riga_corrente = 1                      # export senza posta (solo rubrica, solo calendario...)
+        self.lista_sezioni.setCurrentRow(riga_corrente)
+        self._sezione_scelta(riga_corrente)
+
+    def _sezione_scelta(self, riga):
+        voce = self.lista_sezioni.item(riga) if riga >= 0 else None
+        self.sezione = voce.data(Qt.ItemDataRole.UserRole) if voce is not None else "posta"
+        posta = self.sezione == "posta"
+        self.pila_elenchi.setCurrentIndex(0 if posta else 1)
+        self.pannello_allegati_widget.setVisible(False)
+        self.btn_esporta_mail.setVisible(posta)
+        for b in (self.btn_apri_file, self.btn_salva_file):
+            b.setVisible(self.sezione == "file")
+            b.setEnabled(False)
+        self.btn_esporta.setText("Esporta PDF + allegati" if posta else "Esporta…")
+        self.btn_esporta.setToolTip(
+            "Esporta le mail spuntate: una cartella per ogni mail con il PDF, gli allegati\n"
+            "(i .p7m estratti e verificati), le buste PEC scompattate e i dettagli." if posta else
+            "Esporta gli elementi spuntati (o tutti quelli in elenco) in .ics, .vcf o .csv")
+        nome = NOMI_TIPI_PIM.get(self.sezione, "Posta")
+        self.barra_ricerca.setPlaceholderText(
+            "Cerca in mittenti, destinatari, oggetti, testo e allegati… poi premi Invio" if posta else
+            f"Cerca in {nome.lower()}… poi premi Invio")
+        self.barra_ricerca.setAccessibleName(f"Cerca in {nome.lower()}")
+        self.current_eml_path = None
+        self._elemento_corrente = None
+        self._anteprima_pronta = False
+        self.btn_pdf.setEnabled(False)
+        self.btn_esporta_mail.setEnabled(False)
+        if posta:
+            self.preview_mail.setHtml(html_avviso("Nessuna mail selezionata", "Scegli una mail dall'elenco per leggerla qui."))
+        else:
+            self.preview_mail.setHtml(html_avviso(f"{nome}: scegli un elemento", "Selezionalo nell'elenco per vederlo qui.",
+                                                  dict((t, ic) for t, _n, ic in TIPI_PIM).get(self.sezione, "busta")))
+        self.aggiorna_lista_cartelle()
+
+    def _cartella_cliccata(self, item, _col):
+        if self._ricerca_attiva:              # dopo una ricerca un clic sulla stessa cartella torna al suo elenco
+            self.carica_mail_per_cartella(item, 0)
 
     def aggiorna_lista_cartelle(self):
         if not self.db:
             return
+        self._ricerca_attiva = False
+        self.albero_cartelle.blockSignals(True)
         self.albero_cartelle.clear()
-        cartelle = [r[0] for r in self.db.conn.execute("SELECT DISTINCT cartella FROM emails ORDER BY cartella")]
+        if self.sezione == "posta":
+            cartelle = [r[0] for r in self.db.conn.execute("SELECT DISTINCT cartella FROM emails ORDER BY cartella")]
+        else:
+            cartelle = [r[0] for r in self.db.conn.execute(
+                "SELECT DISTINCT cartella FROM elementi WHERE tipo = ? ORDER BY cartella", (self.sezione,))]
         icona_cartella = icona("cartella", C["accento"], 16)
         nodi = {}
         radice = self.albero_cartelle.invisibleRootItem()
@@ -5297,23 +6923,32 @@ class MailViewerTab(QWidget):
                     nodi[progressivo] = nodo
                 padre = nodi[progressivo]
         self.albero_cartelle.expandAll()
+        self.albero_cartelle.blockSignals(False)
         # si apre subito la posta in arrivo (o la prima cartella): zero clic
-        if radice.childCount() > 0:
+        if self.sezione != "posta":
+            self.albero_cartelle.setCurrentIndex(QModelIndex())
+            self.esegui_ricerca("")                # tutti gli elementi della sezione
+        elif radice.childCount() > 0:
             scelto = next((radice.child(i) for i in range(radice.childCount())
                            if radice.child(i).text(0) == "Posta in arrivo"), radice.child(0))
             self.albero_cartelle.setCurrentItem(scelto)
-            self.carica_mail_per_cartella(scelto, 0)
         else:
             self.popola_tabella([])
             self.preview_mail.setHtml(html_avviso("Nessuna mail trovata", "In questa cartella non ci sono file .eml.", "busta", C["warn"]))
 
     def carica_mail_per_cartella(self, item, column):
-        if not self.db:
+        if not self.db or item is None:
             return
+        self._ricerca_attiva = False
         cartella = item.data(0, Qt.ItemDataRole.UserRole)
         # la cartella e tutte le sue sottocartelle, a qualunque profondità: confronto sul prefisso "percorso/"
         # (non LIKE: i caratteri % e _ nei nomi darebbero falsi positivi e ignorerebbe maiuscole/minuscole)
         prefisso = f"{cartella}/"
+        if self.sezione != "posta":
+            self.popola_elementi(self.db.conn.execute(
+                f"{SQL_ELEMENTI} WHERE tipo = ? AND (cartella = ? OR substr(cartella, 1, ?) = ?) "
+                f"ORDER BY {self._ordine_elementi()}", (self.sezione, cartella, len(prefisso), prefisso)).fetchall())
+            return
         self.popola_tabella(self.db.conn.execute(
             f"{SQL_ELENCO} WHERE cartella = ? OR substr(cartella, 1, ?) = ? ORDER BY data DESC",
             (cartella, len(prefisso), prefisso)).fetchall())
@@ -5330,11 +6965,22 @@ class MailViewerTab(QWidget):
         if not self.db:
             return
         testo = testo.strip()
+        self.albero_cartelle.blockSignals(True)
+        self.albero_cartelle.setCurrentIndex(QModelIndex())
         self.albero_cartelle.clearSelection()
+        self.albero_cartelle.blockSignals(False)
+        self._ricerca_attiva = True
+        termini = re.findall(r'<(.*?)>', testo) + [p for p in re.sub(r'<.*?>', '', testo).split() if p.strip()]
+        if self.sezione != "posta":
+            blocco = "(titolo LIKE ? OR luogo LIKE ? OR persone LIKE ? OR cartella LIKE ? OR testo LIKE ?)"
+            parametri = [self.sezione] + [p for t in termini for p in [f"%{t}%"] * 5]
+            dove = " AND ".join(["tipo = ?"] + [blocco] * len(termini))
+            self.popola_elementi(self.db.conn.execute(
+                f"{SQL_ELEMENTI} WHERE {dove} ORDER BY {self._ordine_elementi()}", parametri).fetchall())
+            return
         if not testo:
             self.popola_tabella(self.db.conn.execute(f"{SQL_ELENCO} ORDER BY data DESC LIMIT 500").fetchall())
             return
-        termini = re.findall(r'<(.*?)>', testo) + [p for p in re.sub(r'<.*?>', '', testo).split() if p.strip()]
         if not termini:
             return
         blocco = ("(mittente LIKE ? OR destinatario LIKE ? OR oggetto LIKE ? OR cartella LIKE ? OR corpo LIKE ? OR "
@@ -5374,15 +7020,199 @@ class MailViewerTab(QWidget):
             if riga[5] > 0:
                 item_all.setIcon(ico_allegato)
                 item_all.setToolTip(f"{riga[5]} allegati" if riga[5] > 1 else "1 allegato")
+                item_all.setData(Qt.ItemDataRole.AccessibleTextRole, f"{riga[5]} allegati" if riga[5] > 1 else "1 allegato")
                 item_all.setData(Qt.ItemDataRole.UserRole, riga[5])
             self.tabella_mail.setItem(r, 5, item_all)
         self.tabella_mail.setSortingEnabled(True)
         self.tabella_mail.setUpdatesEnabled(True)
         n = len(rows)
         self.lbl_risultati.setText("1 mail" if n == 1 else f"{n} mail")
+        annuncia(self.lbl_risultati, "1 mail in elenco" if n == 1 else f"{n} mail in elenco")
+
+    def _ordine_elementi(self):
+        return {"contatto": "titolo COLLATE NOCASE", "file": "titolo COLLATE NOCASE"}.get(self.sezione, "inizio DESC")
+
+    def popola_elementi(self, rows):
+        colonne = COLONNE_ELEMENTI.get(self.sezione, COLONNE_ELEMENTI["nota"])
+        t = self.tabella_elementi
+        t.setSortingEnabled(False)
+        t.setUpdatesEnabled(False)
+        t.setRowCount(0)
+        t.setHorizontalHeaderLabels(["ID"] + [h for h, _c in colonne] + ["Cartella"])
+        for i, (h, _c) in enumerate(colonne, 1):
+            t.setColumnHidden(i, not h)
+        t.setRowCount(len(rows))
+        for r, riga in enumerate(rows):
+            t.setItem(r, 0, QTableWidgetItem(str(riga[0])))
+            for c, (_h, campo) in enumerate(colonne, 1):
+                valore = str(riga[_CAMPI_RIGA[campo]] or "")
+                item = QTableWidgetItem(valore.replace("\n", " · "))
+                item.setToolTip(valore)
+                if c == 1:
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    item.setCheckState(Qt.CheckState.Unchecked)
+                t.setItem(r, c, item)
+            cart = QTableWidgetItem(str(riga[7] or ""))
+            cart.setToolTip(str(riga[7] or ""))
+            t.setItem(r, 5, cart)
+        if self.sezione in ("contatto", "file"):
+            t.horizontalHeader().setSortIndicator(1, Qt.SortOrder.AscendingOrder)
+        else:
+            t.horizontalHeader().setSortIndicator(2, Qt.SortOrder.DescendingOrder)
+        t.setSortingEnabled(True)
+        t.setUpdatesEnabled(True)
+        n = len(rows)
+        nome = NOMI_TIPI_PIM.get(self.sezione, "").lower()
+        self.lbl_risultati.setText(f"{n} elementi" if n != 1 else "1 elemento")
+        annuncia(self.lbl_risultati, f"{nome}: {n} elementi in elenco")
+
+    def _elemento_da_riga(self, r):
+        item = self.tabella_elementi.item(r, 0) if r >= 0 else None
+        if not item or not self.db:
+            return None, None
+        riga = self.db.conn.execute("SELECT dati, file_path FROM elementi WHERE id = ?", (item.text(),)).fetchone()
+        if not riga:
+            return None, None
+        try:
+            return json.loads(riga[0]), riga[1]
+        except Exception:
+            return None, None
+
+    def mostra_elemento_da_tabella(self):
+        righe = self.tabella_elementi.selectionModel().selectedRows() if self.tabella_elementi.selectionModel() else []
+        if not righe:
+            return
+        e, rel = self._elemento_da_riga(righe[0].row())
+        if e is None:
+            return
+        percorso = self.percorso_eml(rel) if rel else None
+        self._elemento_corrente = (e, percorso)
+        self.current_eml_path = None
+        self.pannello_allegati_widget.setVisible(False)
+        if e.get("mime") and percorso and os.path.exists(percorso):   # chat salvate come messaggio (Zimbra/Carbonio)
+            try:
+                with open(percorso, 'rb') as f:
+                    msg = email.message_from_binary_file(f, policy=policy.default)
+                self.preview_mail.setHtml(costruisci_html_mail(msg, e.get("inizio", "")))
+            except Exception as ex:
+                self.preview_mail.setHtml(html_avviso("Conversazione non leggibile", str(ex), "fumetto", C["error"]))
+        else:
+            self.preview_mail.setHtml(costruisci_html_elemento(e))
+        self._anteprima_pronta = True
+        self.btn_pdf.setEnabled(not self._stampa_in_corso)
+        file_ok = e.get("tipo") == "file" and bool(percorso) and os.path.exists(percorso)
+        self.btn_apri_file.setEnabled(file_ok)
+        self.btn_salva_file.setEnabled(file_ok)
+
+    def apri_file_elemento(self):
+        if not self._elemento_corrente:
+            return
+        e, percorso = self._elemento_corrente
+        if e.get("tipo") != "file" or not percorso or not os.path.exists(percorso):
+            return
+        nome = e.get("titolo") or os.path.basename(percorso)
+        if estensione_effettiva(nome) in ESTENSIONI_PERICOLOSE:
+            r = QMessageBox.warning(self, "File potenzialmente pericoloso",
+                                    f"«{nome}» può eseguire programmi sul computer.\n\nLo apro comunque?",
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                    QMessageBox.StandardButton.No)
+            if r != QMessageBox.StandardButton.Yes:
+                return
+        copia = percorso_libero(cartella_temp_allegati(), nome_windows_sicuro(nome, 120, "file"))
+        shutil.copy2(percorso, copia)
+        if not apri_esterno(copia):
+            QMessageBox.warning(self, "Impossibile aprire", f"Nessun programma per aprire «{nome}».")
+
+    def salva_file_elemento(self):
+        if not self._elemento_corrente:
+            return
+        e, percorso = self._elemento_corrente
+        if not percorso or not os.path.exists(percorso):
+            return
+        dest, _ = QFileDialog.getSaveFileName(self, "Salva una copia del file", e.get("titolo") or os.path.basename(percorso))
+        if dest:
+            try:
+                shutil.copy2(percorso, dest)
+            except OSError as ex:
+                mostra_errore_con_copia(self, "Salvataggio non riuscito", str(ex))
+
+    def _elementi_scelti(self):
+        """Elementi spuntati; se nessuno è spuntato, tutti quelli in elenco (dopo conferma)."""
+        t = self.tabella_elementi
+        righe = [r for r in range(t.rowCount()) if t.item(r, 1) and t.item(r, 1).checkState() == Qt.CheckState.Checked]
+        if not righe:
+            if t.rowCount() == 0:
+                QMessageBox.information(self, "Elenco vuoto", "Non c'è nulla da esportare.")
+                return []
+            r = QMessageBox.question(self, "Esportare tutto?", f"Nessun elemento spuntato.\n\nEsporto tutti i "
+                                     f"{t.rowCount()} elementi in elenco?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if r != QMessageBox.StandardButton.Yes:
+                return []
+            righe = list(range(t.rowCount()))
+        return [x for x in (self._elemento_da_riga(r) for r in righe) if x[0] is not None]
+
+    def _esporta_secondo_sezione(self):
+        if self.sezione == "posta":
+            self.esporta_mail_massivo()
+        else:
+            self.esporta_elementi_scelti()
+
+    def esporta_elementi_scelti(self):
+        scelti = self._elementi_scelti()
+        if not scelti:
+            return
+        tipo = self.sezione
+        if tipo == "file":
+            dest = QFileDialog.getExistingDirectory(self, "Dove copio i file?")
+            if not dest:
+                return
+            copiati = 0
+            for e, rel in scelti:
+                p = self.percorso_eml(rel) if rel else None
+                if p and os.path.exists(p):
+                    shutil.copy2(p, percorso_libero(dest, nome_windows_sicuro(e.get("titolo") or os.path.basename(p), 120, "file")))
+                    copiati += 1
+            QMessageBox.information(self, "File copiati", f"Ho copiato {copiati} file in:\n{dest}")
+            return
+        filtri = {"contatto": "Rubrica vCard (*.vcf);;Foglio CSV (*.csv)",
+                  "evento": "Calendario iCalendar (*.ics);;Foglio CSV (*.csv)",
+                  "attivita": "Calendario iCalendar (*.ics);;Foglio CSV (*.csv)",
+                  "nota": "Calendario iCalendar (*.ics);;Foglio CSV (*.csv)"}.get(tipo, "Foglio CSV (*.csv)")
+        nome_base = {"contatto": "contatti.vcf", "evento": "calendario.ics", "attivita": "attivita.ics",
+                     "nota": "note.ics"}.get(tipo, f"{tipo}.csv")
+        dest, filtro = QFileDialog.getSaveFileName(self, f"Esporta {NOMI_TIPI_PIM.get(tipo, '').lower()}", nome_base, filtri)
+        if not dest:
+            return
+        if not os.path.splitext(dest)[1]:
+            dest += ".csv" if "csv" in filtro.lower() else os.path.splitext(nome_base)[1]
+        try:
+            esporta_elementi([e for e, _r in scelti], dest)
+            QMessageBox.information(self, "Esportazione completata", f"{len(scelti)} elementi salvati in:\n{dest}")
+        except Exception as ex:
+            mostra_errore_con_copia(self, "Esportazione non riuscita", str(ex))
+
+    def menu_contestuale_elementi(self, pos):
+        menu = QMenu(self)
+        ic = lambda n: icona(n, C["accento_chiaro"])
+        a_esporta = menu.addAction(ic("esporta"), "Esporta (spuntati o tutti)…")
+        a_file = menu.addAction(ic("apri"), "Apri il file") if self.sezione == "file" else None
+        menu.addSeparator()
+        a_tutte = menu.addAction(ic("spunta"), "Spunta tutti")
+        a_nessuna = menu.addAction(ic("chiudi"), "Togli tutte le spunte")
+        scelta = menu.exec(self.tabella_elementi.viewport().mapToGlobal(pos))
+        if scelta == a_esporta:
+            self.esporta_elementi_scelti()
+        elif a_file is not None and scelta == a_file:
+            self.apri_file_elemento()
+        elif scelta == a_tutte:
+            self.imposta_spunte_massivo(Qt.CheckState.Checked)
+        elif scelta == a_nessuna:
+            self.imposta_spunte_massivo(Qt.CheckState.Unchecked)
 
     def menu_contestuale_tabella(self, pos):
-        riga = self.tabella_mail.rowAt(pos.y())
+        # riga corrente: funziona sia col clic destro sia col tasto Menu / Maiusc+F10
+        riga = self.tabella_mail.currentRow() if self.tabella_mail.currentRow() >= 0 else self.tabella_mail.rowAt(pos.y())
         menu = QMenu(self)
         ic = lambda n: icona(n, C["accento_chiaro"])
         a_apri = menu.addAction(ic("busta"), "Apri la mail in una nuova scheda")
@@ -5406,14 +7236,16 @@ class MailViewerTab(QWidget):
             azioni[scelta]()
 
     def imposta_spunte_massivo(self, stato):
-        self.tabella_mail.setSortingEnabled(False)       # altrimenti le righe si spostano mentre si spunta
+        posta = getattr(self, "sezione", "posta") == "posta"
+        tabella, col = (self.tabella_mail, 2) if posta else (self.tabella_elementi, 1)
+        tabella.setSortingEnabled(False)       # altrimenti le righe si spostano mentre si spunta
         try:
-            for i in range(self.tabella_mail.rowCount()):
-                item = self.tabella_mail.item(i, 2)
+            for i in range(tabella.rowCount()):
+                item = tabella.item(i, col)
                 if item:
                     item.setCheckState(stato)
         finally:
-            self.tabella_mail.setSortingEnabled(True)
+            tabella.setSortingEnabled(True)
 
     def _mail_spuntate(self):
         """[(email_id, percorso .eml, data)] delle righe spuntate."""
@@ -5587,12 +7419,15 @@ class MailViewerTab(QWidget):
             lr.setSpacing(4)
             chk = QCheckBox(nome_all)
             chk.setToolTip(nome_all)
+            chk.setAccessibleDescription("Spunta per aprire o salvare questo allegato")
             lr.addWidget(chk, 1)
             if supportato(nome_all):
                 b_ver = pulsante("", "scudo", "piccolo fantasma", "Verifica la firma digitale (scheda Verifica firme)", C["ok"])
+                b_ver.setAccessibleName(f"Verifica la firma di {nome_all}")
                 b_ver.clicked.connect(lambda checked=False, n=nome_all: self.verifica_allegato(n))
                 lr.addWidget(b_ver)
             b_apri = pulsante("", "apri", "piccolo fantasma", "Apri subito questo allegato senza salvarlo")
+            b_apri.setAccessibleName(f"Apri {nome_all}")
             b_apri.clicked.connect(lambda checked=False, n=nome_all: self.apri_allegati([n]))
             lr.addWidget(b_apri)
             self.layout_checkbox.addWidget(riga)
@@ -5624,11 +7459,12 @@ class MailViewerTab(QWidget):
             self.preview_mail.setHtml(pagina)
         self.btn_pdf.setEnabled(not self._stampa_in_corso)
         self.btn_esporta_mail.setEnabled(True)
+        self._anteprima_pronta = True
 
     def salva_pdf(self):
-        if not self.current_eml_path:
+        if not self.current_eml_path and not self._anteprima_pronta:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Salva la mail in PDF", "", "PDF (*.pdf)")
+        path, _ = QFileDialog.getSaveFileName(self, "Salva in PDF", "", "PDF (*.pdf)")
         if path:
             self._stampa_in_corso = True
             self.btn_pdf.setText("Attendere…")
@@ -5919,17 +7755,20 @@ class FirmeTab(QWidget):
         for etichetta, _k in self.FILTRI:
             self.cmb_filtro.addItem(etichetta)
         self.cmb_filtro.currentIndexChanged.connect(self.ricostruisci)
+        self.cmb_filtro.setAccessibleName("Mostra i documenti con esito")
         self.txt_cerca = QLineEdit()
         self.txt_cerca.addAction(icona("cerca", C["tenue"]), QLineEdit.ActionPosition.LeadingPosition)
         self.txt_cerca.setPlaceholderText("Filtra per nome del file o firmatario…")
         self.txt_cerca.setClearButtonEnabled(True)
         self.txt_cerca.setAcceptDrops(False)
         self.txt_cerca.textChanged.connect(self.ricostruisci)
+        self.txt_cerca.setAccessibleName("Filtra per nome del file o firmatario")
         self.lbl_conteggi = QLabel("")
         self.lbl_conteggi.setObjectName("lblRisultati")
         self.barra = QProgressBar()
         self.barra.setFixedWidth(220)
         self.barra.setFormat("%p%")
+        self.barra.setAccessibleName("Avanzamento della verifica")
         self.barra.hide()
         filtri.addWidget(self.cmb_filtro)
         filtri.addWidget(self.txt_cerca, 1)
@@ -5961,6 +7800,9 @@ class FirmeTab(QWidget):
         self.tabella.setAlternatingRowColors(True)
         self.tabella.itemSelectionChanged.connect(self._mostra_dettaglio)
         self.tabella.cellDoubleClicked.connect(lambda *_: self.apri_documento())
+        self.tabella.setAccessibleName("Documenti verificati")
+        self.tabella.setAccessibleDescription("Invio apre il documento; il dettaglio della verifica è nel pannello a destra")
+        tasti_tabella(self.tabella, None, self.apri_documento)
         divisore.addWidget(self.tabella)
         destra = QFrame()
         destra.setObjectName("pannello")
@@ -5968,6 +7810,7 @@ class FirmeTab(QWidget):
         dl.setContentsMargins(12, 12, 12, 12)
         self.dettaglio = QTextBrowser()
         self.dettaglio.setOpenLinks(False)
+        self.dettaglio.setAccessibleName("Dettaglio della verifica")
         self.dettaglio.setFrameShape(QFrame.Shape.NoFrame)
         self.dettaglio.setStyleSheet(f"QTextBrowser{{background:{C['superficie']};border:none}}")
         azioni = QHBoxLayout()
@@ -6073,8 +7916,12 @@ class FirmeTab(QWidget):
             self.barra.hide()
         self.pila.setCurrentIndex(1 if (self.risultati or attivi) else 0)
         conta = {k: sum(1 for r in self.risultati if r.stato == k) for k in ("ok", "warn", "error", "none")}
-        self.lbl_conteggi.setText(f"{len(self.risultati)} documenti · {conta['ok']} verificati · "
-                                  f"{conta['warn']} attenzione · {conta['error']} non validi" if self.risultati else "")
+        testo_conteggi = (f"{len(self.risultati)} documenti · {conta['ok']} verificati · "
+                          f"{conta['warn']} attenzione · {conta['error']} non validi" if self.risultati else "")
+        if testo_conteggi != self.lbl_conteggi.text():
+            self.lbl_conteggi.setText(testo_conteggi)
+            if testo_conteggi:
+                annuncia(self.lbl_conteggi, testo_conteggi)
         sel = self._selezionato()
         for b in (self.b_apri_doc, self.b_copia):
             b.setEnabled(sel is not None)
@@ -6301,7 +8148,7 @@ class FirmeTab(QWidget):
 # FINESTRA PRINCIPALE
 # ==========================================
 FILTRO_TUTTI = ("Tutti i formati supportati (*.tgz *.tar.gz *.tar *.zip *.mbox *.pst *.ost *.msg *.eml *.emlx "
-                "*.p7m *.p7s *.pdf *.xml);;Tutti i file (*)")
+                "*.ics *.vcf *.csv *.p7m *.p7s *.pdf *.xml);;Tutti i file (*)")
 
 class ZimbraViewerApp(QMainWindow):
     def __init__(self):
@@ -6318,7 +8165,11 @@ class ZimbraViewerApp(QMainWindow):
         pixmap.loadFromData(ICON_SVG.encode('utf-8'))
         self.setWindowIcon(QIcon(pixmap))
         for sequenza, funzione in (("Ctrl+F", self.focus_ricerca), ("Ctrl+O", lambda: self.apri_file_dialog()),
-                                   ("Ctrl+Shift+O", self.apri_cartella_dialog), ("Ctrl+W", self.chiudi_tab_corrente)):
+                                   ("Ctrl+Shift+O", self.apri_cartella_dialog), ("Ctrl+W", self.chiudi_tab_corrente),
+                                   ("Ctrl++", lambda: self.cambia_zoom(0.1)), ("Ctrl+=", lambda: self.cambia_zoom(0.1)),
+                                   ("Ctrl+-", lambda: self.cambia_zoom(-0.1)), ("Ctrl+0", lambda: self.cambia_zoom(0)),
+                                   ("F1", self.mostra_scorciatoie), ("F6", self.pannello_successivo),
+                                   ("Shift+F6", lambda: self.pannello_successivo(-1))):
             QShortcut(QKeySequence(sequenza), self).activated.connect(funzione)
 
         centrale = QWidget()
@@ -6356,7 +8207,25 @@ class ZimbraViewerApp(QMainWindow):
         b_apri.setMenu(menu)
         b_chiudi = pulsante("Chiudi tutto", "cestino", "fantasma", "Chiude tutte le schede aperte e ferma i lavori in corso")
         b_chiudi.clicked.connect(self.svuota_tutto)
-        for b in (b_inizio, b_firme, b_chiudi, b_apri):
+        b_acc = pulsante("Accessibilità", "accessibilita", "fantasma",
+                         "Testo più grande, alto contrasto, animazioni ridotte e scorciatoie da tastiera")
+        menu_acc = QMenu(self)
+        menu_acc.addAction(icona("cerca", C["accento_chiaro"]), "Ingrandisci il testo   Ctrl++", lambda: self.cambia_zoom(0.1))
+        menu_acc.addAction(icona("riduci", C["accento_chiaro"]), "Rimpicciolisci il testo   Ctrl+-", lambda: self.cambia_zoom(-0.1))
+        menu_acc.addAction(icona("aggiorna", C["accento_chiaro"]), "Dimensione normale   Ctrl+0", lambda: self.cambia_zoom(0))
+        menu_acc.addSeparator()
+        self.azione_contrasto = menu_acc.addAction("Alto contrasto (si applica al prossimo avvio)")
+        self.azione_contrasto.setCheckable(True)
+        self.azione_contrasto.setChecked(ACCESSIBILITA["alto_contrasto"])
+        self.azione_contrasto.toggled.connect(self.imposta_alto_contrasto)
+        self.azione_animazioni = menu_acc.addAction("Riduci le animazioni")
+        self.azione_animazioni.setCheckable(True)
+        self.azione_animazioni.setChecked(ACCESSIBILITA["animazioni_ridotte"])
+        self.azione_animazioni.toggled.connect(self.imposta_animazioni_ridotte)
+        menu_acc.addSeparator()
+        menu_acc.addAction(icona("tastiera", C["accento_chiaro"]), "Scorciatoie da tastiera   F1", self.mostra_scorciatoie)
+        b_acc.setMenu(menu_acc)
+        for b in (b_inizio, b_firme, b_acc, b_chiudi, b_apri):
             bl.addWidget(b)
         lay.addWidget(barra)
 
@@ -6365,6 +8234,7 @@ class ZimbraViewerApp(QMainWindow):
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
         self.tabs.tabCloseRequested.connect(self.chiudi_tab)
+        self.tabs.setAccessibleName("Schede aperte")
         contenitore = QWidget()
         cl = QVBoxLayout(contenitore)
         cl.setContentsMargins(10, 6, 10, 0)
@@ -6421,6 +8291,67 @@ class ZimbraViewerApp(QMainWindow):
             return
         self._aggiungi_tab(MailViewerTab(percorso, mode="export", parent_app=self, auto_index=auto_index),
                            "cartella", os.path.basename(percorso.rstrip("\\/")) or percorso, percorso)
+
+    # ---------- accessibilità ----------
+    def cambia_zoom(self, passo):
+        scala = 1.0 if passo == 0 else min(2.0, max(0.8, round(ACCESSIBILITA["scala"] + passo, 1)))
+        ACCESSIBILITA["scala"] = scala
+        impostazioni().setValue("accessibilita/scala", scala)
+        applica_stile(QApplication.instance())
+        self._messaggio_stato(f"Dimensione del testo: {round(scala * 100)}%")
+
+    def imposta_alto_contrasto(self, attivo):
+        impostazioni().setValue("accessibilita/alto_contrasto", bool(attivo))
+        QMessageBox.information(self, "Alto contrasto", "Il tema ad alto contrasto " + ("verrà attivato" if attivo else
+                                "verrà disattivato") + " al prossimo avvio del programma.")
+
+    def imposta_animazioni_ridotte(self, attivo):
+        ACCESSIBILITA["animazioni_ridotte"] = bool(attivo)
+        impostazioni().setValue("accessibilita/animazioni_ridotte", bool(attivo))
+        if attivo:
+            for w in self.findChildren(_Animato):
+                w._timer_anim.stop()
+        self._messaggio_stato("Animazioni ridotte" if attivo else "Animazioni normali")
+
+    def _messaggio_stato(self, testo):
+        sb = self.statusBar()
+        sb.show()
+        sb.showMessage(testo, 3000)
+        annuncia(sb, testo)
+        QTimer.singleShot(3200, lambda: sb.setVisible(
+            any(not c.isHidden() for c in sb.findChildren(QWidget, "chipEsportazione"))))
+
+    def pannello_successivo(self, verso=1):
+        """F6 / Maiusc+F6: passa tra le zone principali (barra in alto, schede, ricerca, cartelle, elenco, anteprima)."""
+        scheda = self.tabs.currentWidget()
+        candidati = [self.tabs.tabBar()]
+        for nome in ("barra_ricerca", "txt_cerca", "lista_sezioni", "albero_cartelle", "tabella_mail", "tabella_elementi",
+                     "tabella", "preview_mail", "dettaglio"):
+            w = getattr(scheda, nome, None)
+            if isinstance(w, QWidget) and w.isVisible() and w.isEnabled():
+                candidati.append(w)
+        if scheda is self.benvenuto:
+            candidati += [b for b in scheda.findChildren(QPushButton) if b.isVisible()][:1]
+        attuale = QApplication.focusWidget()
+        i = next((k for k, w in enumerate(candidati) if attuale is w or (attuale is not None and w.isAncestorOf(attuale))), -1)
+        candidati[(i + verso) % len(candidati)].setFocus(Qt.FocusReason.TabFocusReason)
+
+    def mostra_scorciatoie(self):
+        righe = [("Ctrl+O", "Apri un file (export, mail, calendario, rubrica, documento firmato)"),
+                 ("Ctrl+Maiusc+O", "Apri una cartella"), ("Ctrl+F", "Vai al campo di ricerca"),
+                 ("Invio", "Nel campo di ricerca: cerca. Nell'elenco: apri la mail in una scheda / apri il file"),
+                 ("Spazio", "Nell'elenco: spunta o togli la spunta alla riga corrente"),
+                 ("Frecce", "Muoviti tra cartelle, sezioni e righe (l'anteprima segue la selezione)"),
+                 ("Tasto Menu, Maiusc+F10", "Azioni sulla riga corrente"),
+                 ("F6 / Maiusc+F6", "Passa alla zona successiva / precedente della finestra"),
+                 ("Ctrl+Tab / Ctrl+Maiusc+Tab", "Scheda successiva / precedente"), ("Ctrl+W", "Chiudi la scheda"),
+                 ("Ctrl++ / Ctrl+- / Ctrl+0", "Testo più grande / più piccolo / normale"),
+                 ("Esc", "Nelle finestre di avanzamento: riduci e continua a lavorare"), ("F1", "Questo elenco")]
+        testo = "<table cellspacing='0' cellpadding='4'>" + "".join(
+            f"<tr><td><b>{html.escape(k)}</b></td><td>{html.escape(v)}</td></tr>" for k, v in righe) + "</table>"
+        box = QMessageBox(QMessageBox.Icon.Information, "Scorciatoie da tastiera", testo, parent=self)
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.exec()
 
     def focus_ricerca(self):
         barra = getattr(self.tabs.currentWidget(), 'barra_ricerca', None) or getattr(self.tabs.currentWidget(), 'txt_cerca', None)
@@ -6525,16 +8456,16 @@ class ZimbraViewerApp(QMainWindow):
                     self.carica_eml_in_tab(converti_singola_in_eml(percorso), os.path.basename(percorso))
                 except Exception as e:
                     mostra_errore_con_copia(self, "Impossibile leggere la mail", f"{os.path.basename(percorso)}:\n{e}")
-            elif tipo in ("archivio", "pst", "mbox", "cartella_da_convertire"):
+            elif tipo in ("archivio", "pst", "mbox", "cartella_da_convertire", "pim"):
                 self._coda_import.append((percorso, descrizione))   # le importazioni vanno una alla volta
             elif not os.path.exists(percorso):
                 mostra_errore_con_copia(self, "Percorso non trovato", f"Non esiste:\n{percorso}")
             else:
                 mostra_errore_con_copia(
                     self, "Formato non riconosciuto",
-                    f"{percorso}\n\n{descrizione.capitalize()}.\n\nPosso aprire: export Zimbra (.tgz), Google Takeout (.zip/.mbox), "
+                    f"{percorso}\n\n{descrizione.capitalize()}.\n\nPosso aprire: export Zimbra e Carbonio (.tgz), Google Takeout (.zip/.mbox), "
                     "Outlook (.pst, .ost, .msg), Thunderbird e Apple Mail (cartelle o .mbox), Maildir, singole mail (.eml, .emlx) "
-                    "e documenti firmati (.p7m, .pdf, .xml).\n\nNella scheda «Inizio» trovi come ottenere l'export dal tuo programma.")
+                    "calendari (.ics), rubriche (.vcf, .csv) e documenti firmati (.p7m, .pdf, .xml).\n\nNella scheda «Inizio» trovi come ottenere l'export dal tuo programma.")
         if firmati:
             self.mostra_firme().aggiungi_percorsi(firmati)
         self._avvia_prossima_importazione()
@@ -6557,7 +8488,7 @@ class ZimbraViewerApp(QMainWindow):
 
     def _avvia_importazione(self, sorgente, descrizione):
         nome = os.path.basename(sorgente.rstrip("\\/"))
-        base = re.sub(r'(\.tar\.gz|\.tgz|\.tar|\.zip|\.mbox|\.pst|\.ost)$', '', nome, flags=re.IGNORECASE) or "posta"
+        base = re.sub(r'(\.tar\.gz|\.tgz|\.tar|\.zip|\.mbox|\.pst|\.ost|\.ics|\.vcf|\.csv)$', '', nome, flags=re.IGNORECASE) or "posta"
         padre = QFileDialog.getExistingDirectory(
             self, f"Dove creo la cartella con la posta pronta da consultare? ({descrizione})", os.path.dirname(sorgente))
         if not padre:
@@ -6754,20 +8685,11 @@ if __name__ == '__main__':
     app.setApplicationName("ZimbraViewer")
     app.setApplicationDisplayName("ZimbraViewer")
     app.setDesktopFileName("zimbraviewer")       # Wayland/GNOME: collega la finestra al file .desktop e alla sua icona
-    stile = STILE
+    carica_accessibilita()                       # zoom, alto contrasto (anche dal sistema), animazioni ridotte
+    applica_palette(ACCESSIBILITA["alto_contrasto"])
     if not IS_WIN:
         app.setStyle("Fusion")                   # il foglio di stile è pensato su Fusion/Windows, non sullo stile macOS
-        # Fusion senza tema di icone mostra una "X" rossa sulle schede: la si sostituisce con una crocetta del tema
-        try:
-            croce = os.path.join(cartella_temp_allegati(), "chiudi_scheda.svg")
-            with open(croce, "w", encoding="utf-8") as f:
-                f.write(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" '
-                        f'stroke="{C["attenuato"]}" stroke-width="1.6" stroke-linecap="round"/></svg>')
-            stile += (f"\nQTabBar::close-button {{ image: url({croce.replace(os.sep, '/')}); subcontrol-position: right; "
-                      f"border-radius: 4px; margin: 2px; }}\nQTabBar::close-button:hover {{ background: {C['hover']}; }}\n")
-        except Exception:
-            pass
-    app.setStyleSheet(stile)
+    applica_stile(app)
     _pix_icona = QPixmap()
     _pix_icona.loadFromData(ICON_SVG.encode('utf-8'))
     app.setWindowIcon(QIcon(_pix_icona))

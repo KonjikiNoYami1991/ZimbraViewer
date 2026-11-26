@@ -23,7 +23,7 @@ if not exist "%SCRIPT%" (
 
 echo.
 echo [1/4] Installo/aggiorno le dipendenze...
-python -m pip install --upgrade pip pyinstaller PyQt6 PyQt6-WebEngine asn1crypto pyhanko pyhanko-certvalidator cryptography lxml
+python -m pip install --upgrade pip pyinstaller PyQt6 PyQt6-WebEngine asn1crypto pyhanko pyhanko-certvalidator cryptography lxml olefile certifi tzdata
 if errorlevel 1 goto errore
 rem cryptography per Python 3.15 si lega a python3t.dll, che PyInstaller non include da solo
 set "DLL_ARG="

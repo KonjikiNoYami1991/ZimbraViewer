@@ -9,7 +9,7 @@
 # ZimbraViewer
 
 **Offline mail-archive viewer with digital signature verification.**
-Opens mail exports from Zimbra, Gmail, Outlook, Thunderbird, Apple Mail (or any mbox, Maildir, `.eml`), indexes them in a local database and lets you **search, read, print to PDF and export** messages with their attachments — **no server, no mail client, no internet**: your files never leave your computer.
+Opens exports from Zimbra, Carbonio, Gmail, Outlook, Thunderbird, Apple/iCloud (or any mbox, Maildir, `.eml`, `.ics`, `.vcf`), indexes them in a local database and lets you **search, read, print to PDF and export** messages and attachments, plus **calendar, tasks, contacts, chats, notes and files** — **no server, no mail client, no internet**: your files never leave your computer.
 
 It ships with a **digital signature** verifier (CAdES `.p7m`, PAdES, XAdES, Italian e-invoices/FatturaPA) that builds trust chains against the **Italian AgID Trusted List (eIDAS)**, and renders Italian **PEC** (certified e-mail) the way a certified mailbox does.
 
@@ -24,7 +24,7 @@ It ships with a **digital signature** verifier (CAdES `.p7m`, PAdES, XAdES, Ital
 - **Supported sources**
   | Source | Format |
   |---|---|
-  | Zimbra | `.tgz` / `.tar.gz` / `.tar` or extracted folder |
+  | Zimbra, Carbonio | `.tgz` / `.tar.gz` / `.tar` (REST `fmt=tgz`) or extracted folder |
   | Gmail (Google Takeout) | `.mbox` or `.zip` — folders rebuilt from `X-Gmail-Labels` |
   | Outlook | `.pst` / `.ost` (libpff), single `.msg` files (olefile, compressed RTF included) |
   | Thunderbird | mbox files and `.sbd` subfolders |
@@ -32,6 +32,20 @@ It ships with a **digital signature** verifier (CAdES `.p7m`, PAdES, XAdES, Ital
   | Generic | mbox, Maildir/Maildir++, `.eml`, `.zip` |
 - Archives are **converted once** into a `Posta - <name>` folder of `.eml` files; afterwards that folder opens directly.
 - mbox files are **streamed**, even multi-GB ones. Imports are queued, with progress and cancel.
+
+### Calendar, tasks, contacts, chats, notes and files
+Everything the export holds besides mail shows up in **sections** on the left (Mail, Calendar, Tasks, Contacts, Chat, Notes, Files, with item counts), each with folders, search, preview, print to PDF and **export to `.ics`, `.vcf` or `.csv`** (Briefcase files can be opened or saved).
+
+| Source | What is read |
+|---|---|
+| Zimbra / Carbonio (`.tgz`) | appointments (`.appt`), tasks (`.task`), contacts and groups (`.meta` metadata), chats (`.chat`), notes, Briefcase |
+| Google Takeout | Calendar (`.ics`), Contacts (`.vcf`), Tasks (`Tasks.json`), Keep (`.json`), Google Chat (`messages.json`) |
+| Microsoft Outlook | calendar, task, contact and note items inside `.pst`/`.ost` and `.msg`; `.csv` contacts |
+| Apple / iCloud | Calendar and Reminders (`.ics`), Contacts (`.vcf`) |
+| Thunderbird | address book (`abook.sqlite`), local calendar (`local.sqlite`), exported `.ics`/`.vcf` |
+| Any program | `.ics`, `.vcs` (events, tasks, journal), `.vcf` (vCard 2.1/3.0/4.0, quoted-printable too), contact CSV |
+
+Time zones, all-day events, recurrences (in plain words), attendees with their replies, task priority and status. Indexes built by earlier versions are completed automatically on first open.
 
 ### Search and reading
 - **SQLite** index (`zimbra_index.db`) stored inside the mail folder with **relative paths**: move or copy the folder without re-indexing.
@@ -53,6 +67,12 @@ It ships with a **digital signature** verifier (CAdES `.p7m`, PAdES, XAdES, Ital
 
 ### Interface
 - Dark theme, **single-instance** window (new launches hand their paths to the open window), long jobs in **non-modal** dialogs that can be minimised to the status bar.
+
+### Accessibility (WCAG 2.2 AA / EN 301 549)
+- **Keyboard**: focus always visible; arrow keys in sections, folders and lists (the preview follows); **Space** checks, **Enter** opens; Menu key / Shift+F10 for actions; **F6** moves between window areas; **F1** lists every shortcut.
+- **Screen readers** (NVDA, JAWS, Narrator, VoiceOver, Orca): names and descriptions for icon-only buttons, fields, tables, progress bars and preview; result counts are reported; preview pages declare their language.
+- **Vision**: text contrast ≥ 4.5:1 and control borders ≥ 3:1; **high-contrast theme** (*Accessibilità* menu, or automatic when enabled in the OS); **text zoom** with Ctrl+ / Ctrl- / Ctrl+0, preview included.
+- **Motion**: animations stop by themselves after 5 seconds and can be switched off with *Riduci le animazioni* (automatic when the OS asks for reduced motion).
 
 ## Download and install
 
@@ -104,7 +124,7 @@ Without an optional library everything else still works: signatures show as *Not
 ## Run from source
 
 ```bash
-pip install pyqt6 pyqt6-webengine asn1crypto pyhanko pyhanko-certvalidator cryptography lxml olefile libpff-python
+pip install pyqt6 pyqt6-webengine asn1crypto pyhanko pyhanko-certvalidator cryptography lxml olefile certifi tzdata libpff-python
 ```
 
 ```bash
