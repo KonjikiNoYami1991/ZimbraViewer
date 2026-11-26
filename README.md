@@ -15,6 +15,17 @@ Integra un verificatore di **firme digitali** (CAdES `.p7m`, PAdES, XAdES, Fattu
 
 ![Schermata iniziale](docs/screenshot.png)
 
+## Novità della 3.2.2
+Il verificatore di firme integrato è ora quello del **P7MReader 3.2.1** (prima era il 3.0):
+- **Trusted List AgID autentica**: si usa solo se la sua firma è integra e il firmatario è quello indicato dalla Commissione europea nella **LOTL**; una lista manomessa viene scartata.
+- **Stato del certificatore alla data della firma** (storico ServiceHistory della lista), non solo quello di oggi.
+- Nuovo controllo **«Qualificazione eIDAS»**: firma qualificata (QES), AdES/QC, dispositivo QSCD, firma o sigillo; **marche temporali qualificate** riconosciute.
+- Controllo dell'**uso della chiave** del certificato; certificatore riconosciuto anche dopo il **rinnovo** del suo certificato (chiave/SKI); certificati **autofirmati** spiegati nell'esito.
+- **Report CSV e HTML** con la qualificazione e accessibili; il dettaglio della verifica e i `Dettagli mail.txt` dicono **quale Trusted List** è stata usata e se è autentica.
+- I pacchetti includono una **copia aggiornata della Trusted List**, così le verifiche funzionano anche al primo avvio senza rete.
+
+Novità precedenti: 3.2.1 calendario, contatti, attività, chat, note e file, Carbonio e accessibilità; 3.2 versioni per macOS e Linux. L'elenco completo è nel CHANGELOG in testa al sorgente e nelle [Releases](https://github.com/KonjikiNoYami1991/ZimbraViewer/releases).
+
 ## Funzionalità
 
 ### Apertura della posta
@@ -53,11 +64,13 @@ Eventi con fuso orario, giorni interi, ricorrenze (in chiaro: «ogni settimana �
 - **Storico della conversazione**: intestazioni dei messaggi citati/inoltrati trasformate in separatori leggibili (Outlook, Gmail, Zimbra, Thunderbird).
 - **PEC**: fascia con il tipo di ricevuta e i dati di certificazione letti da `daticert.xml`; il messaggio originale in `postacert.eml` viene mostrato direttamente.
 
-### Firme digitali (P7MReader integrato)
-- **CAdES** (`.p7m`, anche annidati o in base64; `.p7s` detached), **PAdES** (PDF firmati, con rilevamento modifiche dopo la firma), **XAdES** (`.xml`, verifica crittografica), riepilogo **FatturaPA**.
-- Controfirme e **marche temporali** RFC 3161 verificate; validazione alla data di firma per i certificati scaduti.
-- Catena di fiducia verso la **Trusted List AgID** (aggiornata a ogni avvio, con copia offline; accettata solo se la sua firma XAdES è integra e il firmatario è quello indicato dalla **LOTL della Commissione UE**), stato del certificatore **alla data della firma** (storico ServiceHistory), **qualificazione eIDAS** (QES, AdES/QC, QSCD) e marche temporali qualificate, controllo dell'uso della chiave + archivio certificati di sistema (Windows, portachiavi macOS, CA della distribuzione Linux); revoca OCSP/CRL in soft-fail.
-- Esiti chiari: **Verificato / Attenzione / Non valido**, con l'elenco dei controlli per ogni firma; report CSV/HTML.
+### Firme digitali (motore del P7MReader 3.2.1 integrato)
+- **CAdES** (`.p7m`, anche annidati o in base64; `.p7s` detached), **PAdES** (PDF firmati, con rilevamento modifiche dopo la firma), **XAdES** (`.xml`, verifica crittografica), riepilogo **FatturaPA**. Funziona anche sugli **allegati delle mail**, senza salvarli prima.
+- Controfirme e **marche temporali** RFC 3161 verificate (anche **qualificate eIDAS**); validazione alla data di firma per i certificati scaduti.
+- **Trusted List AgID** come fonte delle radici: aggiornata a ogni avvio, con copia offline (anche inclusa nel pacchetto), accettata solo se la sua firma XAdES è integra e il firmatario è quello indicato dalla **LOTL della Commissione UE**.
+- **Stato del certificatore alla data della firma** (storico ServiceHistory) e controllo **«Qualificazione eIDAS»** (QES, AdES/QC, QSCD, firma o sigillo); certificatore riconosciuto anche per chiave/SKI dopo un rinnovo.
+- Controlli per ogni firma: integrità, legame firma-certificato, marca temporale, validità e **uso della chiave**, catena di fiducia (Trusted List + archivio di sistema: Windows, portachiavi macOS, CA della distribuzione Linux + CA aggiunte nel P7MReader), revoca OCSP/CRL in soft-fail, algoritmi, Trusted List, qualificazione.
+- Esiti chiari: **Verificato / Attenzione / Non valido**, con l'elenco dei controlli per ogni firma; report **CSV/HTML** accessibili, con la qualificazione e la Trusted List usata.
 
 ### Esportazione
 - **Esporta PDF + allegati** (massiva sulle mail spuntate o sulla singola mail): per ogni mail una cartella `AAAA.MM.GG HH.mm.ss <oggetto>` con PDF, allegati (`.p7m` originale **e** documento estratto), `Dettagli mail.txt` con intestazioni ed esiti delle verifiche, e `postacert.eml` scompattato.
@@ -137,7 +150,7 @@ python "ZimbraViewer 3.2.py" "C:\Mail\export" backup.tgz takeout.zip outlook.pst
 
 ## Compilare l'eseguibile
 
-PyInstaller non fa cross-compilazione: ogni versione si compila sul proprio sistema. Il modo più semplice è il workflow **GitHub Actions** `.github/workflows/build.yml`, che compila tutte le versioni in parallelo: avvialo da *Actions → Build → Run workflow*, oppure crea un tag `v*` (es. `v3.2.0`) per ottenere anche una Release con tutti i pacchetti.
+PyInstaller non fa cross-compilazione: ogni versione si compila sul proprio sistema. Il modo più semplice è il workflow **GitHub Actions** `.github/workflows/build.yml`, che compila tutte le versioni in parallelo: avvialo da *Actions → Build → Run workflow*, scrivendo nel campo *release* il tag da creare (es. `v3.2.2`) per ottenere anche la Release con tutti i pacchetti, oppure crea un tag `v*`. La build scarica da sola la Trusted List AgID più recente da includere nei pacchetti.
 
 ### macOS e Linux
 
@@ -170,7 +183,7 @@ Il primo crea un singolo `dist\ZimbraViewer.exe`; `onedir` crea una cartella (av
 | Cosa | Dove |
 |---|---|
 | Indice della posta | `zimbra_index.db` dentro la cartella della posta |
-| Trusted List AgID | Windows `%LOCALAPPDATA%\ZimbraViewer\TSL-IT.xml` · macOS `~/Library/Caches/ZimbraViewer/TSL-IT.xml` · Linux `~/.cache/ZimbraViewer/TSL-IT.xml` |
+| Trusted List AgID e LOTL UE | `TSL-IT.xml` e `eu-lotl.xml` in Windows `%LOCALAPPDATA%\ZimbraViewer\` · macOS `~/Library/Caches/ZimbraViewer/` · Linux `~/.cache/ZimbraViewer/` |
 | Impostazioni firme | lette (senza modificarle) da `P7MReader/impostazioni.json` in `%APPDATA%` (Windows), `~/Library/Application Support` (macOS) o `~/.config` (Linux), se presente |
 | Preferenze dell'interfaccia | QSettings: registro (Windows), `~/Library/Preferences` (macOS), `~/.config/ZimbraViewer` (Linux) |
 | Allegati aperti al volo | cartella temporanea, ripulita all'uscita |

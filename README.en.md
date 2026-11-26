@@ -17,6 +17,17 @@ It ships with a **digital signature** verifier (CAdES `.p7m`, PAdES, XAdES, Ital
 
 ![Home screen](docs/screenshot.png)
 
+## What's new in 3.2.2
+The built-in signature verifier is now the one of **P7MReader 3.2.1** (it was 3.0):
+- **Authentic AgID Trusted List**: used only if its signature is intact and its signer is the one listed by the European Commission in the **LOTL**; a tampered list is discarded.
+- **Certifier status at signing time** (the list's ServiceHistory), not just today's status.
+- New **"eIDAS qualification"** check: qualified signature (QES), AdES/QC, QSCD device, signature or seal; **qualified timestamps** recognised.
+- **Key-usage** check; certifier recognised even after its certificate was **renewed** (key/SKI); **self-signed** certificates explained in the outcome.
+- **CSV and HTML reports** with the qualification, accessible; the verification detail and `Dettagli mail.txt` state **which Trusted List** was used and whether it is authentic.
+- Packages ship an **up-to-date copy of the Trusted List**, so verification works on first start even offline.
+
+Earlier: 3.2.1 calendar, contacts, tasks, chats, notes and files, Carbonio and accessibility; 3.2 macOS and Linux builds. Full list in the CHANGELOG at the top of the source and in the [Releases](https://github.com/KonjikiNoYami1991/ZimbraViewer/releases).
+
 ## Features
 
 ### Opening mail
@@ -55,11 +66,13 @@ Time zones, all-day events, recurrences (in plain words), attendees with their r
 - **Conversation history**: quoted/forwarded headers turned into readable separators (Outlook, Gmail, Zimbra, Thunderbird).
 - **PEC**: banner with receipt type and certification data from `daticert.xml`; the original message inside `postacert.eml` is shown directly.
 
-### Digital signatures (built-in P7MReader)
-- **CAdES** (`.p7m`, nested or base64; detached `.p7s`), **PAdES** (signed PDFs, detects changes after signing), **XAdES** (`.xml`, cryptographic check), **FatturaPA** summary.
-- Counter-signatures and RFC 3161 **timestamps** verified; expired certificates validated at signing time.
-- Trust chain against the **AgID Trusted List** (refreshed at every start, with offline copy; accepted only if its XAdES signature is intact and its signer is the one listed in the **EU Commission's LOTL**), certifier status **at signing time** (ServiceHistory), **eIDAS qualification** (QES, AdES/QC, QSCD) and qualified timestamps, key-usage check + system certificate store (Windows, macOS keychain, Linux distribution CAs); OCSP/CRL revocation in soft-fail mode.
-- Clear outcomes: **Verified / Warning / Invalid**, with the list of checks for every signature; CSV/HTML reports.
+### Digital signatures (built-in P7MReader 3.2.1 engine)
+- **CAdES** (`.p7m`, nested or base64; detached `.p7s`), **PAdES** (signed PDFs, detects changes after signing), **XAdES** (`.xml`, cryptographic check), **FatturaPA** summary. Works on **mail attachments** too, without saving them first.
+- Counter-signatures and RFC 3161 **timestamps** verified (including **eIDAS-qualified** ones); expired certificates validated at signing time.
+- **AgID Trusted List** as the source of trust roots: refreshed at every start, with an offline copy (also bundled), accepted only if its XAdES signature is intact and its signer is the one listed in the **EU Commission's LOTL**.
+- **Certifier status at signing time** (ServiceHistory) and **"eIDAS qualification"** check (QES, AdES/QC, QSCD, signature or seal); certifier recognised by key/SKI after a renewal.
+- Checks for every signature: integrity, signing-certificate binding, timestamp, validity and **key usage**, trust chain (Trusted List + system store: Windows, macOS keychain, Linux distribution CAs + CAs added in P7MReader), OCSP/CRL revocation in soft-fail mode, algorithms, Trusted List, qualification.
+- Clear outcomes: **Verified / Warning / Invalid**, with the list of checks for every signature; accessible **CSV/HTML** reports with the qualification and the Trusted List used.
 
 ### Export
 - **Export PDF + attachments** (bulk on checked messages or a single one): for each message a folder `YYYY.MM.DD HH.mm.ss <subject>` containing the PDF, attachments (original `.p7m` **and** extracted document), a `Dettagli mail.txt` with headers and verification results, and unpacked `postacert.eml`.
@@ -139,7 +152,7 @@ python "ZimbraViewer 3.2.py" "C:\Mail\export" backup.tgz takeout.zip outlook.pst
 
 ## Build the executable
 
-PyInstaller does not cross-compile: each build is made on its own OS. The easiest way is the **GitHub Actions** workflow `.github/workflows/build.yml`, which builds every version in parallel: start it from *Actions → Build → Run workflow*, or push a `v*` tag (e.g. `v3.2.0`) to also get a Release with all packages attached.
+PyInstaller does not cross-compile: each build is made on its own OS. The easiest way is the **GitHub Actions** workflow `.github/workflows/build.yml`, which builds every version in parallel: start it from *Actions → Build → Run workflow*, typing the tag to create in the *release* field (e.g. `v3.2.2`) to also get the Release with all packages attached, or push a `v*` tag. The build downloads the latest AgID Trusted List by itself and bundles it.
 
 ### macOS and Linux
 
@@ -172,7 +185,7 @@ The first produces a single `dist\ZimbraViewer.exe`; `onedir` produces a folder 
 | What | Where |
 |---|---|
 | Mail index | `zimbra_index.db` inside the mail folder |
-| AgID Trusted List | Windows `%LOCALAPPDATA%\ZimbraViewer\TSL-IT.xml` · macOS `~/Library/Caches/ZimbraViewer/TSL-IT.xml` · Linux `~/.cache/ZimbraViewer/TSL-IT.xml` |
+| AgID Trusted List and EU LOTL | `TSL-IT.xml` and `eu-lotl.xml` in Windows `%LOCALAPPDATA%\ZimbraViewer\` · macOS `~/Library/Caches/ZimbraViewer/` · Linux `~/.cache/ZimbraViewer/` |
 | Signature settings | read (never written) from `P7MReader/impostazioni.json` in `%APPDATA%` (Windows), `~/Library/Application Support` (macOS) or `~/.config` (Linux), if present |
 | UI preferences | QSettings: registry (Windows), `~/Library/Preferences` (macOS), `~/.config/ZimbraViewer` (Linux) |
 | Attachments opened on the fly | temp folder, cleaned up on exit |
